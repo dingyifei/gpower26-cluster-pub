@@ -11,6 +11,9 @@ the Wi-Fi row reads the address first and "<ssid> · -52 dBm ›" below (B11); n
 (B6, VegasApp.tick); a program already running is switched to, not started twice (B9). Layout: 60 columns upright
 fits 60x56 (keyboard hidden) without scrolling; wider than 100 columns (landscape, 132x22 with the keyboard hidden)
 three columns: status | brightness, text size, screen | windows, travel/programs/power (2x2).
+Rulings of 24 Nov: upright, the spare rows sit between the status rows and BRIGHTNESS (#gap, sized by VegasApp.fit), so
+the buttons are at the bottom and the message line is the last line, at 51, 60, 68 and 72 columns (R2); Away and
+Charge are state buttons, "Charge" / "80 %" on two lines when one does not fit (R4, tui.StateButton).
 """
 import json
 
@@ -21,7 +24,7 @@ from textual.widgets import Static
 from . import uictl, uistatus as st
 from . import readers as R
 from .host import P, exists, write_atomic
-from .tui import AskScreen, Button, Scroll, ChoiceScreen, StatusRow, VegasApp, notice, styled
+from .tui import AskScreen, Button, Scroll, ChoiceScreen, StateButton, StatusRow, VegasApp, notice, styled
 
 TEXT_SIZES = {"51": "8.25", "60": "7.25", "68": "6.25", "72": "5.75"}   # columns -> foot point size (60 measured)
 ROTATIONS = [("normal", "upright"), ("90", "keys up"), ("270", "keys down")]
@@ -37,6 +40,8 @@ HOME_CSS = """
 .wide #right, .wide #right2 { width: 1fr; }
 .wide .msg { margin: 0 1 0 1; }
 #head { height: 1; margin: 1 1 0 1; }
+#gap { height: 0; }
+.wide #gap { display: none; }
 #bdown, #bup { width: 13; }
 .wide #bdown, .wide #bup { width: 9; }
 #bar { width: 1fr; height: 4; content-align: center middle; }
@@ -44,6 +49,15 @@ HOME_CSS = """
 #travel Button { width: 100%; margin: 0; }
 .wide #travel { grid-size: 2; grid-gutter: 1 1; height: 9; }
 """
+
+
+class Bar(Static):
+    """The brightness bar. It repaints itself when its own width changes: Home's resize handler can run before the
+    bar has its new width (a text size change drew a 26-cell bar into 22 cells, wrapped onto a second line)."""
+
+    def on_resize(self, ev) -> None:
+        app = self.app
+        app._paint_bar(app.data["level"] if app.data else uictl.brightness())
 
 
 def gather(runner):
@@ -74,9 +88,10 @@ class Home(VegasApp):
     CSS = VegasApp.CSS + HOME_CSS
     UI_NAME = "home"
     TITLE = "vegas-home"
+    FLEX = "#gap"            # R2: the spare rows upright, between the status rows and the first button group
 
     def compose(self) -> ComposeResult:
-        with Scroll():
+        with Scroll(id="page"):
             yield Static("", id="head")
             with Vertical(id="cols"):
                 with Vertical(id="left"):
@@ -86,11 +101,12 @@ class Home(VegasApp):
                     yield StatusRow("USB", id="r-usb")
                     yield StatusRow("Root", id="r-root")
                     yield StatusRow("SSH", id="r-ssh")
+                yield Static("", id="gap")
                 with Vertical(id="right"):
                     yield Static("BRIGHTNESS", classes="section")
                     with Horizontal(classes="btnrow"):
                         yield Button("−", id="bdown")
-                        yield Static("", id="bar")
+                        yield Bar("", id="bar")
                         yield Button("+", id="bup", classes="last")
                     yield Static("TEXT SIZE, COLUMNS", classes="section")
                     with Horizontal(classes="btnrow"):
@@ -105,8 +121,8 @@ class Home(VegasApp):
                     yield Horizontal(classes="btnrow", id="wins")
                     yield Static("TRAVEL, PROGRAMS, POWER", classes="section")
                     with Grid(id="travel"):
-                        yield Button("Away off", id="away")
-                        yield Button("Charge 80 %", id="charge")
+                        yield StateButton("Away", "off", id="away")
+                        yield StateButton("Charge", "80 %", id="charge")
                         yield Button("Programs", id="programs", classes="quiet")
                         yield Button("Power", id="power", classes="quiet")
             yield Static("", id="msg", classes="msg")
@@ -182,19 +198,22 @@ class Home(VegasApp):
             self.q(f"#ts-{cols}", Button).set_class(d["font"] == pt, "on")
         for t, _ in ROTATIONS:
             self.q(f"#rot-{t}", Button).set_class(d["rot"] == t, "on")
-        away = self.q("#away", Button)
-        away.label = "Away on" if d["away"] else "Away off"
+        away = self.q("#away", StateButton)
+        away.set_state("on" if d["away"] else "off")
         away.set_class(d["away"], "on")
         away.set_class(bool(d["away"] and d.get("away_open")), "alarm")   # B1: red while SSH is open on Wi-Fi
-        ch = self.q("#charge", Button)
-        ch.label = {"full": "Charge full", "ignored": "Charge ? (ignored)"}.get(d["charge"], "Charge 80 %")
+        ch = self.q("#charge", StateButton)
+        ch.set_state(charge_state(d["charge"]))
         ch.set_class(d["charge"] != "band", "on")
         if d["windows"] != self._windows:
             self._windows = d["windows"]
             self.call_later(self._paint_windows)   # async: the old buttons must be gone before the same ids return
 
     def _paint_bar(self, level) -> None:
-        w = self.q("#bar", Static).size.width
+        try:
+            w = self.q("#bar", Static).size.width
+        except Exception:      # the 0.4 s timer after a brightness tap can fire while the app is closing
+            return
         cells = 26 if w <= 0 else max(6, min(26, w - 2))   # 26 upright; narrower in the landscape columns
         n = uictl.brightness_cells(level, cells)
         bar = styled("▇" * n, "warn")
@@ -275,8 +294,8 @@ class Home(VegasApp):
     # --- charge to full (spec 5.7) ----------------------------------------------------------------------------------
     def _charge_toggle(self) -> None:
         full = st.charge_mode() == "band"
-        self.q("#charge", Button).set_class(full, "on")
-        self.q("#charge", Button).label = "Charge full" if full else "Charge 80 %"
+        self.q("#charge", StateButton).set_class(full, "on")
+        self.q("#charge", StateButton).set_state("full" if full else "80 %")
         self.bg(charge_set, self._charge_done, self.runner, full)
 
     def _charge_done(self, msg) -> None:
@@ -335,6 +354,12 @@ class Home(VegasApp):
         self.refresh_status()
 
 
+def charge_state(mode) -> str:
+    """The Charge button's state (R4: short enough for the 51-column button's inside width of 9 cells): the 70-80 %
+    band shows its stop level, "full" while charging to full, "ignored" when the guard ignored the override."""
+    return {"full": "full", "ignored": "ignored"}.get(mode, "80 %")
+
+
 def running(runner, cmd: str) -> bool:
     """Is the program running (any user)? pgrep -x on its process name (comm keeps 15 characters)."""
     return runner.run(["pgrep", "-x", cmd[:15]], timeout=3).ok
@@ -344,7 +369,15 @@ def charge_set(runner, full: bool) -> str:
     """vegas-charge full|band if installed; else the same thing by hand: the override file + one guard run."""
     if runner.which("vegas-charge"):
         res = runner.run(["vegas-charge", "full" if full else "band"], timeout=20)
-        return (res.out.strip() or res.err.strip()) or ("Charging to full" if full else "Back to the 70-80 % band")
+        # vegas-charge prints its status word (seen on #5: a bare "band" on the message line); say it in words
+        words = {"band": "Back to the 70-80 % band",
+                 "full": "Charging to full until reboot (temperature limits still apply)",
+                 "full (pending)": "Charge to full set; the guard applies it within 60 s",
+                 "ignored": "Charge to full ignored by the guard (see vegas-charge status)"}
+        out = res.out.strip()
+        if res.ok and out in words:
+            return words[out]
+        return (out or res.err.strip()) or ("Charging to full" if full else "Back to the 70-80 % band")
     import os
     try:
         if full:

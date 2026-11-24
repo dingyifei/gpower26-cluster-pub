@@ -3,7 +3,8 @@
 > Imported from the v1 build session's working notes. Paths starting `<scratch>/` are that session's working
 > folder; its test suites are in `tests/ui-seed/` and move to `tests/ui/` with issue `ui-testing-01`. The design page
 > ("Vegas Touch UI", drafts and versions v27 to v30) is the maintainer's private document and is not published; what
-> it decided is restated here. The designer's later rulings are in `rulings-report.md`.
+> it decided is restated here. The designer's later rulings are in `rulings-report.md` (23 Nov) and
+> `rulings-24nov.md` (24 Nov, R1 to R7).
 
 Compared: design page v30 (draft 7, all 1701 lines) plus designer-points.md, against the uncommitted repo files under
 `linux/debian/overlay/`, `linux/ui-src/wvkbd/`, `linux/debian/build.sh` and `scripts/linux_b.sh`, read on 23 Nov.

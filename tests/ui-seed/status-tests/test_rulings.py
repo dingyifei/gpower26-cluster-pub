@@ -53,7 +53,8 @@ class Strip3b(unittest.TestCase):
         root = tree(); guard(root); w(root, "/run/vegas-ui/kbd", "shown")
         b = blocks(root)
         kbd = named(b, "kbd")
-        self.assertEqual(text_of(kbd), " kbd ")
+        self.assertEqual(text_of(kbd), " kbd ")                    # r6b: measured widths fit "kbd" with wifi upright
+        self.assertEqual(text_of(named(blocks(root, 796), "kbd")), " kbd ")
         self.assertIn('background="%s"' % BUTTON, kbd["full_text"])
         self.assertIn('foreground="%s"' % TEXT, kbd["full_text"])
         main = re.search(r'<span ([^>]*)> MAIN </span>', b[0]["full_text"]).group(1)
@@ -62,7 +63,8 @@ class Strip3b(unittest.TestCase):
     def test_kbd_hidden_plain_dim(self):
         root = tree(); guard(root); w(root, "/run/vegas-ui/kbd", "hidden")
         kbd = named(blocks(root), "kbd")
-        self.assertEqual(text_of(kbd), " kbd ")                    # same width: nothing else moves
+        self.assertEqual(text_of(kbd), " kbd ")                    # same width as shown: nothing else moves
+        self.assertEqual(text_of(named(blocks(root, 796), "kbd")), " kbd ")
         self.assertNotIn("background", kbd["full_text"])
         self.assertIn('foreground="%s"' % DIM, kbd["full_text"])
 
@@ -94,7 +96,9 @@ class Ruler(unittest.TestCase):
         r = run(tree(), "--ruler-once", "360")
         self.assertEqual(r.returncode, 0, r.stderr)
         b = json.loads(r.stdout)
-        self.assertEqual(len(b), 34)                               # 360 - status_edge_padding 20 = 34 cells
+        self.assertEqual(len(b), 35)                               # 360 - status_edge_padding 18 = 34 cells + 2 px
+        trail = b.pop()
+        self.assertEqual((trail["instance"], trail["min_width"]), ("trail", 2))   # cell n stays at x 10n
         self.assertEqual([int(text_of(x)) for x in b], list(range(34)))
         for i, x in enumerate(b):
             self.assertEqual((x["name"], x["min_width"], x["separator_block_width"], x["separator"]),
@@ -107,7 +111,8 @@ class Ruler(unittest.TestCase):
 
     def test_ruler_landscape(self):
         b = json.loads(run(tree(), "--ruler-once", "796").stdout)
-        self.assertEqual(len(b), 77)
+        self.assertEqual(len(b), 78)                               # 796 - 18 = 77 cells + an 8 px trail
+        self.assertEqual((b[-1]["instance"], b[-1]["min_width"]), ("trail", 8))
 
     def test_ruler_flag_on_off_cli(self):
         root = tree()

@@ -18,6 +18,10 @@ while :; do
   st=$(cat /sys/class/power_supply/battery/status 2>/dev/null)
   t=$(( $(cat "$zone/temp" 2>/dev/null || echo 0) / 1000 ))
   case $st in Charging) c="+" ;; "Not charging") c="=" ;; *) c="" ;; esac
-  printf "%s   %s°C   %s%%%s\n" "$(date +%H:%M)" "$t" "$cap" "$c"
+  # swaybar right-aligns this plain line near the right edge (status_edge_padding does not apply to plain text:
+  # it ends at x ~357); single spaces keep it within 17 characters (136.5 logical px, "23:59 105°C 100%+"), so it
+  # starts right of x 220 (measured in the VM), clear of the camera hole's forbidden band x 166-194 (R6, see HOLE in
+  # vegas-status; the old three-space line reached x 188 at 100 % and 105 °C)
+  printf "%s %s°C %s%%%s\n" "$(date +%H:%M)" "$t" "$cap" "$c"
   sleep 20
 done

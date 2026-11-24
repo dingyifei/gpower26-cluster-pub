@@ -6,6 +6,8 @@
 #   D17 Away: PIN pad drawn by the glance window, hit-tested here from raw (grabbed) touch coordinates
 #   Q6  wake shows the glance first, a volume key continues; Q9 volume keys = PageUp/PageDown in the terminal
 #   Q15 dim 45 s, off 60 s, glance 10 s, PIN pad 30 s; Away dim 2 min, off 3 min; Q18 5 s Power hold = reboot
+#   R7  menu Cancel returns where the menu opened: from the dark (off/glance) to the glance, muted, fresh 10 s;
+#       from on/dim to on; Away locked to off. The 60 s idle close always ends dark.
 # Spec: docs/ui/ui-spec.md section 2. Keys/touch are found by device name, never by event number.
 # Threads: Inputs reads evdev and alone handles the 5 s hold (os.sync with a 2 s cap, then reboot(2)), so a logic
 # thread stuck in a swaymsg/tmux call (all have timeouts) can never stop the emergency reboot.
@@ -239,7 +241,7 @@ class Keys:
         self.glance = self.menu = None
         self.dark = False                   # in glance/pin with the backlight held at 0 (Away, window not mapped yet)
         self.unmute_try = 0.0
-        self.menu_back = "on"
+        self.menu_back = "on"                # where Cancel returns: on | glance | off (to_menu, R7)
         self.unlocked = False               # Away: right PIN entered since the last screen-off
         self.pin, self.hl, self.msg = "", None, ""
 
@@ -368,7 +370,10 @@ class Keys:
 
     def to_menu(self):
         variant = "short" if self.locked() else ("full-prog" if self.context() == "prog" else "full")
-        self.menu_back = "off" if self.locked() else "on"
+        # R7: Cancel goes back where the menu came from. Locked (Away): the dark, as before. From the dark (off, or
+        # the glance, which is still the dark side: touch muted, no shell reachable) back to the glance; from the lit
+        # shell (on, and dim: the same terminal at a lower backlight, touch live) back to on.
+        self.menu_back = "off" if self.locked() else ("glance" if self.state in (None, "off", "glance") else "on")
         kill_child(self.glance); self.glance = None
         if not self.locked():
             self.mute_at = None; self.mute(False)
@@ -380,12 +385,33 @@ class Keys:
             self.menu = spawn([MENU, variant, rot], stdout=subprocess.PIPE)
         except OSError as e:
             log("menu", e); self.menu = None
-            return self.to_on() if not self.locked() else self.to_off()
+            return self.menu_close()
         m = self.menu
         threading.Thread(target=lambda: self.q.put(("menu", m, m.communicate()[0], m.returncode)),
                          daemon=True).start()
         self.activity = time.monotonic()
         self.set_state("menu")
+
+    def menu_close(self):
+        """Cancel / Esc (R7): back to where the menu was opened (menu_back). The 60 s idle close is not this: tick
+        always ends it in the dark."""
+        if self.menu_back == "off": self.to_off()
+        elif self.menu_back == "glance": self.back_to_glance()
+        else: self.to_on()
+
+    def back_to_glance(self):
+        """Menu opened from the dark with Away off: the menu took touch (as built); the glance gets the mute back
+        and a fresh 10 s. The mute is in place before the backlight comes on: a Cancel tapped by finger can reach
+        here before its lift, so this waits for the lift first (wait_touch_up, at most 3 s, as to_off's deferred
+        mute; other events are kept in order). Dark until the glance maps or 1.5 s pass; Away is off here, so after
+        that it lights anyway, as a wake from off does (to_glance: a lit, maybe hung screen beats one that looks
+        dead), and the shell under the closed menu can then show lit, with touch muted."""
+        self.backlight(0)
+        kill_child(self.menu); self.menu = None
+        self.wait_touch_up()
+        self.mute_at = None
+        self.mute(True)
+        self.to_glance()
 
     # ---- actions (2.7), executed here as root ----------------------------------------------------------------
     def action(self, row):
@@ -504,8 +530,7 @@ class Keys:
             self.menu = None
             if self.state != "menu": return
             if rc == 0 and out and out.strip() and out.strip() != "Cancel": self.action(out.splitlines()[-1])
-            elif self.menu_back == "off": self.to_off()
-            else: self.to_on()
+            else: self.menu_close()
         elif kind == "ctl":
             self.ctl(item[1])
 

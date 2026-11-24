@@ -11,10 +11,20 @@ all and finishes a join a dead vegas-net left); `vegas-net --restore <token>` is
 Textual). OWE networks are labelled OWE and refused like 802.1X (B10). A new hotspot passphrase is made by
 `vegas-hotspot newpass` (B7: the tool owns /etc/vegas/hotspot.conf; no passphrase on the message line). No 10 s
 refresh while the screen is off (B6).
+Rulings of 24 Nov: Network asks wpa_supplicant for one scan when its window (tmux window 1 of "main") comes to the
+front and the last scan request is older than SCAN_STALE (R3). It knows it is in front from /run/vegas-ui/kbd-window,
+which uictl's tmux hook (session-window-changed) writes and the inotify watch on /run/vegas-ui reports (at start,
+when the file is not there yet, it asks tmux once). Never with the screen off or another window in front, never
+retried after a failure (the next try needs another visit to the front at least SCAN_STALE later), never while
+wpa_supplicant does not answer, never automatically while the Wi-Fi hotspot is on; Rescan always asks, and only a
+tapped Rescan puts a refused request on the message line. Empty list: "No other networks in range" while
+connected, "No networks in range" otherwise (R5). Upright, the in-range list takes the spare rows and scrolls in them,
+so the button groups stay at the bottom when a scan fills it (R2); the Hotspot button is a state button (R4).
 """
 import re
 import shlex
 import sys
+import time
 import urllib.parse
 
 from rich.text import Text
@@ -28,10 +38,12 @@ from textual.widgets import Static
 from . import uictl, uistatus as st
 from .host import Runner
 from .theme import DIM, GREEN, TEXT
-from .tui import AskScreen, Button, Scroll, ChoiceScreen, VegasApp, notice, styled
+from .tui import AskScreen, Button, Scroll, ChoiceScreen, StateButton, VegasApp, notice, styled
 from .wpa import JoinGuard, Wpa, band, bars, heal, printable, show
 
 SHOWN = 6
+SCAN_STALE = 120          # s: R3, an automatic scan only when the last scan request is older than this
+NET_WINDOW = 1            # tmux window of "main" that runs vegas-net (vegas-session)
 CHECK_URL = "http://connectivitycheck.gstatic.com/generate_204"   # [BUILDER CHOICE] spec 4.5
 UNSUPPORTED = ("802.1X", "WEP", "OWE")     # tapping one says "not supported yet" (ruling B10: OWE is not open)
 HEALED = {"restored": "An interrupted join was undone: back on the old network.",
@@ -39,7 +51,7 @@ HEALED = {"restored": "An interrupted join was undone: back on the old network."
 
 NET_CSS = """
 #cols { height: auto; }
-#left, #right, #list, #wins { height: auto; }
+#left, #right, #list, #wins, #inrange { height: auto; }
 .wide #cols { layout: horizontal; }
 .wide #left, .wide #right { width: 1fr; }
 #head { height: 1; margin: 1 1 0 1; }
@@ -154,27 +166,40 @@ class Net(VegasApp):
     UI_NAME = "net"
     TITLE = "vegas-net"
 
-    def __init__(self, runner=None, **kw):
+    FLEX = "#inrange"        # R2: the list takes the spare rows upright and scrolls in them
+    FLEX_MIN = 6             # two network rows; below that the page scrolls
+
+    def __init__(self, runner=None, clock=None, **kw):
         super().__init__(runner=runner, **kw)
         self.wpa = Wpa(self.runner, JoinGuard(self.runner))
         self.nets, self.saved, self.expanded = [], {}, False
         self.status, self.hot, self.ssh = {}, {"kind": None}, []
-        self.scan_age = None      # minutes since the last scan result; None = never
+        self.clock = clock or time.monotonic
+        self.scanned_at = None    # clock() of the last scan result; None = never
+        self.asked_at = None      # clock() of the last scan request (automatic or Rescan, worked or not)
         self.busy = False
+        self.front = False        # window 1 is the one in front of "main"
+        self.status_seen = False  # the first status (hotspot state) is in: automatic scans may start
+
+    @property
+    def scan_age(self):
+        """Whole minutes since the last scan result; None = never."""
+        return None if self.scanned_at is None else int(max(0, self.clock() - self.scanned_at) // 60)
 
     def compose(self) -> ComposeResult:
-        with Scroll():
+        with Scroll(id="page"):
             yield Static("", id="head")
             yield Static("", id="cur")
             with Vertical(id="cols"):
                 with Vertical(id="left"):
                     yield Static("IN RANGE", classes="section")
-                    yield Vertical(id="list")
-                    yield Button("", id="more", classes="quiet")
+                    with Scroll(id="inrange"):
+                        yield Vertical(id="list")
+                        yield Button("", id="more", classes="quiet")
                 with Vertical(id="right"):
                     yield Static("SHARE THIS CONNECTION", classes="section")
                     with Horizontal(classes="btnrow"):
-                        yield Button("Hotspot off", id="hotspot")
+                        yield StateButton("Hotspot", "off", id="hotspot")
                         yield Button("Mobile data · no modem", id="mobile", classes="dimmed last")
                     yield Static("NETWORK", classes="section")
                     with Horizontal(classes="btnrow"):
@@ -187,18 +212,48 @@ class Net(VegasApp):
         self.q("#more").display = False
         self.bg(lambda: heal(self.wpa, self.wpa.guard, at_start=True), self._healed)
         self.refresh_status()
-        self.rescan()
+        self.call_later(self._paint_list)
+        if uictl.ui_read("kbd-window") is None:       # no window change seen this boot yet: ask tmux once
+            self.bg(uictl.current_window, lambda w: self._front_check("" if w is None else str(w)), self.runner)
         self.set_interval(10, self.tick)
         self.set_interval(60, self._age)
 
     # --- reading ----------------------------------------------------------------------------------------------------
     def _gather(self):
-        s = self.wpa.status()
-        s["rssi"] = self.wpa.rssi() if s.get("wpa_state") == "COMPLETED" else None
+        s = self.wpa.status()          # {} = wpa_supplicant did not answer ("Wi-Fi is off"; no automatic scan)
+        if s.get("wpa_state") == "COMPLETED":
+            s["rssi"] = self.wpa.rssi()
         return s, st.hotspot(self.runner), st.ssh_local_addrs()
 
     def refresh_status(self) -> None:
+        self._front_check()          # one file read: the fallback when the inotify watch is not there
         self.bg(self._gather, self._apply_status)
+
+    # --- scan when the window comes to the front (R3) -------------------------------------------------------------
+    def front_changed(self) -> None:
+        self._front_check()
+
+    def _front_check(self, window=None) -> None:
+        """window: the index in front as a str; None = read /run/vegas-ui/kbd-window (missing: no change)."""
+        if window is None:
+            window = uictl.ui_read("kbd-window")
+            if window is None:
+                return
+        front = window == str(NET_WINDOW)
+        came = front and not self.front
+        self.front = front
+        if came and self.status_seen:
+            self.bg(self._gather, lambda res: (self._apply_status(res), self.auto_scan()))   # hotspot state now
+
+    def auto_scan(self) -> None:
+        """R3: one scan, only in front, screen on, Wi-Fi answering, hotspot off, last request older than SCAN_STALE."""
+        if not self.front or self.busy or not self.status.get("wpa_state") or "wifi" in kinds(self.hot):
+            return
+        if uictl.screen_state() == "off":
+            return
+        if self.asked_at is not None and self.clock() - self.asked_at < SCAN_STALE:
+            return
+        self.rescan()
 
     def _healed(self, res) -> None:
         """Start-up: every start runs enable_network all, and finishes a join a dead vegas-net left (ruling B2)."""
@@ -208,6 +263,10 @@ class Net(VegasApp):
 
     def _apply_status(self, res) -> None:
         self.status, self.hot, self.ssh = res
+        first = not self.status_seen
+        self.status_seen = True
+        if first:
+            self.call_later(self.auto_scan)     # in front at start: the first scan once the hotspot state is known
         s = self.status
         cur = self.q("#cur", Static)
         if s.get("wpa_state") == "COMPLETED":
@@ -226,17 +285,17 @@ class Net(VegasApp):
             t.append("\n" + s.get("wpa_state", "").lower().replace("_", " "), style=DIM)
         cur.update(t)
         on = kinds(self.hot)
-        hb = self.q("#hotspot", Button)
-        hb.label = f"Hotspot on · {' + '.join(on)}" if on else "Hotspot off"
+        hb = self.q("#hotspot", StateButton)
+        hb.set_state(f"on · {' + '.join(on)}" if on else "off")
         hb.set_class(bool(on), "on")
+        for e in self.q("#list").query("#empty"):    # connected or not changes the empty-list text (R5)
+            e.update(self._empty_text())
         self._paint_head()
 
     def on_resize(self, ev) -> None:     # (Textual also runs VegasApp.on_resize: the wide class)
         self.call_after_refresh(self._paint_head)   # the right-aligned scan age follows a rotation
 
     def _age(self) -> None:
-        if self.scan_age is not None:
-            self.scan_age += 1
         self._paint_head()
 
     def _paint_head(self) -> None:
@@ -247,25 +306,45 @@ class Net(VegasApp):
         t.append(" " * max(1, w - 7 - len(right)) + right, style=DIM)
         self.q("#head", Static).update(t)
 
-    def rescan(self) -> None:
+    def rescan(self, tapped=False) -> None:
+        """One scan request (Rescan, after a join/forget, or auto_scan); never retried. Only a Rescan the person tapped
+        reports a refused request on the message line; an automatic or post-join one leaves the line alone (a join's
+        "connected" stays) and the head keeps the age of the last scan that worked."""
         if self.busy:
             return
         self.busy = True
+        self.asked_at = self.clock()
         self._paint_head()
 
         def job():
-            self.wpa.scan()
-            self.runner.sleep(3)
-            return self.wpa.scan_results(), self.wpa.networks()
-        self.bg(job, self._apply_scan)
+            try:
+                if not self.wpa.scan():
+                    return None
+                self.runner.sleep(3)
+                return self.wpa.scan_results(), self.wpa.networks()
+            except Exception:
+                return None
+        self.bg(job, lambda res: self._apply_scan(res, tapped))
 
-    def _apply_scan(self, res) -> None:
+    def _apply_scan(self, res, tapped=False) -> None:
         self.busy = False
+        if res is None:
+            self._paint_head()
+            if tapped:
+                self.say("Scan: wpa_supplicant did not take the request. Rescan to try again.", "warn")
+            return
         self.nets, nets_saved = res
         self.saved = {n["ssid"]: n for n in nets_saved}
-        self.scan_age = 0
+        self.scanned_at = self.clock()
         self._paint_head()
         self.call_later(self._paint_list)   # async: the old rows must be gone before #empty can come back
+
+    def _empty_text(self) -> str:
+        if self.scanned_at is None:
+            return "Not scanned yet"
+        if self.status.get("wpa_state") == "COMPLETED":
+            return "No other networks in range"
+        return "No networks in range"
 
     async def _paint_list(self) -> None:
         box = self.q("#list", Vertical)
@@ -273,7 +352,7 @@ class Net(VegasApp):
         shown = self.nets if self.expanded else self.nets[:SHOWN]
         rows = [NetRow(n, n["ssid"] in self.saved, classes="alt" if i % 2 else "") for i, n in enumerate(shown)]
         if not rows:
-            rows = [Static("No networks in range (Rescan)", id="empty")]
+            rows = [Static(self._empty_text(), id="empty")]
         await box.mount(*rows)
         more = self.q("#more", Button)
         extra = len(self.nets) - SHOWN
@@ -361,7 +440,7 @@ class Net(VegasApp):
             self.expanded = not self.expanded
             self.call_later(self._paint_list)
         elif bid == "rescan":
-            self.rescan()
+            self.rescan(tapped=True)
         elif bid == "mobile":
             notice(self, "Mobile data · no modem", "Reboot to Android for calls and mobile data.")
         elif bid == "signin":

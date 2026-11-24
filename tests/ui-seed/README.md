@@ -14,9 +14,10 @@ What to know before you run anything:
 | Folder | What it tests |
 |---|---|
 | `tests/` | Textual pilot tests for the Home and Network screens, with a fake sysroot (`conftest.py`) |
-| `status-tests/` | `vegas-status` (the strip feed and the text report); `vm/` holds the headless-sway harness |
+| `status-tests/` | `vegas-status` (the strip feed and the text report, `test_hole.py` for the camera-hole band, which compares against `vegas-status.pre-r6`, the strip feed as it was before that band); `vm/` holds the headless-sway harness |
 | `keys-test/` | `vegas-keys` through uinput; `bin/` holds stub programs it calls |
 | `session-tests/` | Away mode, hotspot, power menu, keyboard and Firefox preference checks |
 | `strip-test/` | strip layout rendering |
+| `glyph-measure/` | one-off tools that measured the strip's glyph widths in headless sway (`blocks.json` is their generated input); `r6b.sh` is `status-tests/vm/r6.sh` with two more knobs (`VSENV`, `WAIT`) |
 | `glue-live/`, `test-glue.sh` | the session glue (terminal loop, tmux) |
 | `integ-smoke.sh` | the full headless sway smoke test |

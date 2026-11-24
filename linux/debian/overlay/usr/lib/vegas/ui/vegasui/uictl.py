@@ -11,7 +11,8 @@ state query):
                       and the keyboard's Hide key (verbs show/hide/toggle); restored on a shell window
   kbd-field-<app>     pid of the Home/Network process while one of its text fields has focus (a dead pid counts as
                       no field, so a crashed page never keeps the keyboard up)
-  kbd-window          the window of "main" last seen in front (written by `window`, `auto` and the field verbs)
+  kbd-window          the window of "main" last seen in front (written by `window`, `auto` and the field verbs);
+                      vegas-net watches it to know when its window comes to the front (ruling R3: scan then)
 Verbs (kbd(), and `vegas-kbd <verb>` / `python3 -m vegasui.uictl kbd <verb>` for shell callers):
   show | hide | toggle    the person's choice: sets kbd and kbd-user
   field-on APP | field-off APP   a text field of APP (home|net) got / lost focus, then "auto" (from the CLI the field

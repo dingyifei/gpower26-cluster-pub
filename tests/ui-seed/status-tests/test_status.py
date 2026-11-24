@@ -184,7 +184,9 @@ class Strip(unittest.TestCase):
         print("\n", txt, [x.get("min_width") for x in b])
         self.assertEqual([x["name"] for x in b], ["home", "net", "soc", "bat", "kbd"])
         self.assertEqual(txt[0][5:], " vegas5 MAIN ")                  # host fits upright
-        self.assertEqual("".join(txt[1:]), "wifi 41° 78%▲ kbd ")       # usb dropped (camera hole)
+        # R6 (camera hole x 166-194): usb dropped; measured widths (r6b: ▲ one cell, trimmed block rounding) keep
+        # "wifi 41° 78%▲ kbd" in full (designer ruling)
+        self.assertEqual("".join(txt[1:]), "wifi 41° 78%▲ kbd ")
         land = [text_of(x) for x in self.blocks(root, 796)]
         self.assertEqual(land[0][5:], " vegas5 MAIN ")
         self.assertEqual("".join(land[1:]), "wifi usb 41° 78%▲ kbd ")   # ruling 3a: no band top in normal running
@@ -192,13 +194,23 @@ class Strip(unittest.TestCase):
             self.assertEqual((x["markup"], x["separator"], x["separator_block_width"]), ("pango", False, 0))
         self.assertTrue(self.clear_of_hole(b, 360))
 
-    def clear_of_hole(self, b, width, hole=20, pad=20, char=8.03):
-        """Neither side's text reaches the centre gap (right group measured with ▲/▼ at 1.5 cells). The left text
-        starts where min_width puts it: width - pad - right - min_width (= pad + SAFETY)."""
-        w = lambda t: sum(char * (1.5 if c in "▲▼" else 1) for c in t)
-        left, right = w(text_of(b[0])), sum(w(text_of(x)) for x in b[1:])
-        lstart = width - pad - right - b[0]["min_width"]
-        return lstart + left <= width / 2 - hole / 2 and width - pad - right >= width / 2 + hole / 2
+    def clear_of_hole(self, b, width, band=(166, 194), pad=20, char=8.03, rpad=18):
+        """R6: nothing drawn in x 166-194 logical (px 498-582 at scale 3). Every block has a min_width; each right
+        block's is at least its text (8.03 per cell, ▲/▼ one cell as measured in the VM, minus 0.3 when its first
+        character carries the letter_spacing trim) and right-aligned, so the right ink starts at width - rpad - sum
+        of the right min_widths + the first block's unfilled leading spaces (0.4 less when trimmed), and must be past
+        px 582 (x >= 194 1/3); the left text starts at width - rpad - all min_widths (= pad)."""
+        w = lambda t: sum(char for c in t)
+        trimmed = lambda x: "letter_spacing" in x["full_text"] and len(text_of(x)) >= 2
+        for x in b[1:]:
+            self.assertGreaterEqual(x["min_width"], w(text_of(x)) - (0.3 if trimmed(x) else 0), x)
+            self.assertEqual(x["align"], "right")
+        right = sum(x["min_width"] for x in b[1:])
+        lead = len(text_of(b[1])) - len(text_of(b[1]).lstrip(" ")) if "background" not in b[1]["full_text"] else 0
+        lead_px = max(0, lead * char - (0.4 if lead and trimmed(b[1]) else 0))
+        lstart = width - rpad - right - b[0]["min_width"]                 # right edge: status_edge_padding 18
+        return lstart >= pad and lstart + w(text_of(b[0])) <= band[0] and \
+            width - rpad - right + lead_px >= band[1] + 1 / 3
 
     def test_badges_and_shrink(self):
         root = tree(soc=12, online=0, soc_mc=72000, policy0=1600000)
@@ -239,7 +251,8 @@ class Strip(unittest.TestCase):
 class Bar(unittest.TestCase):
     def test_feed_and_taps(self):
         root = tree(); guard(root)
-        e = dict(os.environ, VEGAS_SYSROOT=root, VEGAS_SBIN=root + "/sbin", SWAYSOCK="/nonexistent")
+        e = dict(os.environ, VEGAS_SYSROOT=root, VEGAS_SBIN=root + "/sbin", SWAYSOCK="/nonexistent",
+                 VEGAS_STRIP_HOLE="0")      # feed mechanics only: no camera-hole band, so the upright strip keeps "wifi"
         p = subprocess.Popen([sys.executable, STATUS, "--bar"], env=e, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True)
         hdr = json.loads(p.stdout.readline()); self.assertEqual(hdr, {"version": 1, "click_events": True})
@@ -261,7 +274,7 @@ class Bar(unittest.TestCase):
         line = p.stdout.readline()
         self.assertTrue(line.startswith(",["), line)
         net = [x for x in json.loads(line[1:]) if x["name"] == "net"][0]
-        self.assertIn('#7F8B99">wifi', net["full_text"])
+        self.assertRegex(net["full_text"], r'#7F8B99">(<span letter_spacing="-\d+">w</span>ifi|wifi)')
         p.terminate(); p.wait(5)
         err = p.stderr.read()
         self.assertIn("click", err)                    # the junk event was reported, not fatal

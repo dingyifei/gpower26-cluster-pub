@@ -3,7 +3,8 @@
 > Imported from the v1 build session's working notes. Paths starting `<scratch>/` are that session's working
 > folder; its test suites are in `tests/ui-seed/` and move to `tests/ui/` with issue `ui-testing-01`. The design page
 > ("Vegas Touch UI", drafts and versions v27 to v30) is the maintainer's private document and is not published; what
-> it decided is restated here. The designer's later rulings are in `rulings-report.md`.
+> it decided is restated here. The designer's later rulings are in `rulings-report.md` (23 Nov) and
+> `rulings-24nov.md` (24 Nov, R1 to R7).
 
 Safe to build as on the page: vegas-status (strip feed), vegas-term loop, vegas-keys, power menu on bemenu. vegas-home / vegas-net layouts: expect small text changes in v28.
 1. Grid: 60 x 37 in tmux with keyboard up, cells 17 x 39 px. Buttons are 4 rows tall. Drawings are 7.5 pt full width; do not copy pixel numbers from them.

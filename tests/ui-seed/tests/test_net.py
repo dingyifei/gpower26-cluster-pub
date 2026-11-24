@@ -102,6 +102,8 @@ def make(join="ok", extra=None):
     fw = FakeWpa(join)
     table = dict(BASE)
     table[("wpa_cli",)] = fw
+    # tmux: Network (window 1) is in front, so it scans at start (ruling R3, 24 Nov); the test_r3_* tests in test_rulings_24nov.py cover the rest
+    table[("tmux", "display-message")] = "1\n"
     table.update(extra or {})
     return FakeRunner(table, installed={"qrencode"}), fw
 

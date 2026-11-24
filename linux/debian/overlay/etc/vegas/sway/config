@@ -5,7 +5,8 @@
 xwayland disable
 output * disable
 # subpixel none: sway does not rotate the subpixel order with vegas-rotate (UI spec 5.8)
-output DSI-1 enable mode 1080x2388@60Hz scale 3 position 0 0 subpixel none bg #1d3b53 solid_color
+# bg: the UI's one background (ruling R1, the same #0b0f14 as foot and the pages) around the terminal's side gaps
+output DSI-1 enable mode 1080x2388@60Hz scale 3 position 0 0 subpixel none bg #0b0f14 solid_color
 # insets (physical px): the bar is 36 logical = 108 px over the camera band; bottom 48, sides 30
 default_border none
 default_floating_border none
@@ -19,14 +20,14 @@ focus_follows_mouse no
 input type:touch map_to_output DSI-1
 seat * hide_cursor 3000
 # the top strip: /usr/lib/vegas/swaystatus runs vegas-status --bar (falls back to a plain line). Its fit around the camera
-# hole assumes `font monospace 10` and `status_edge_padding 20` (VEGAS_STRIP_CHAR_PX / VEGAS_STRIP_PAD if changed).
+# hole assumes `font monospace 10` and `status_edge_padding 18` (VEGAS_STRIP_CHAR_PX / VEGAS_STRIP_RPAD if changed).
 bar {
     position top
     height 36
     font monospace 10
     workspace_buttons no
     tray_output none
-    status_edge_padding 20
+    status_edge_padding 18
     # swaybar runs this through sh -c: choom puts the feed (Python) back at a normal OOM score (swaybar itself is
     # started by sway without a shell and keeps sway's -1000)
     status_command exec choom -n 0 -- /usr/lib/vegas/swaystatus

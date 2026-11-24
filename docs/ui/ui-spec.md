@@ -3,7 +3,8 @@
 > Imported from the v1 build session's working notes. Paths starting `<scratch>/` are that session's working
 > folder; its test suites are in `tests/ui-seed/` and move to `tests/ui/` with issue `ui-testing-01`. The design page
 > ("Vegas Touch UI", drafts and versions v27 to v30) is the maintainer's private document and is not published; what
-> it decided is restated here. The designer's later rulings are in `rulings-report.md`.
+> it decided is restated here. The designer's later rulings are in `rulings-report.md` (23 Nov) and
+> `rulings-24nov.md` (24 Nov, R1 to R7).
 
 Source: approved design page "Vegas Touch UI", draft 6 (23 Nov 2026), read in full, corrected with the phone facts
 verified on #5 on 2026-11-23 and with the repo's overlay as it stands at commit 137558a. Where the two disagree the

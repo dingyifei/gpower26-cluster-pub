@@ -9,6 +9,11 @@ Slow work (commands) runs in threads via VegasApp.bg(); the UI never blocks on a
 Screen dark (ruling B6): the 10 s refresh (VegasApp.tick) is skipped while /run/vegas-ui/state says off (one file
 read, no fork); when vegas-keys writes another state the page refreshes once at once (inotify on /run/vegas-ui;
 without inotify, a 2 s file read while dark).
+Layout (ruling R2, 24 Nov): upright, the rows a page does not need go between its read-only block and its first
+button group (VegasApp.fit grows the page's FLEX widget: Home's #gap, Network's in-range list), so the buttons sit at
+the bottom within thumb reach and the message line is the last line. Landscape (.wide) keeps its own layout.
+State buttons (ruling R4): StateButton draws "name state" on one line when that fits the button's inside width, else
+the name on line 1 and the whole state on line 2; recomputed from the button's own width on every resize.
 Keyboard (ruling 8): Home and Network are drawn with the keyboard hidden; it comes up only while a text field is open
 (AskScreen) and goes away when it closes, through uictl.kbd_field (its pid file lets the tmux window hook bring it
 back when this window returns to the front, and restore the person's choice on a shell window).
@@ -17,6 +22,7 @@ import ctypes
 import os
 import struct
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -63,9 +69,21 @@ ChoiceScreen, AskScreen {{ background: {BG}; align: center bottom; }}
 
 
 class Scroll(VerticalScroll):
-    """A scrolling page that never takes focus itself (the key highlight should land on buttons and rows only)."""
+    """A scrolling page that never takes focus itself (the key highlight should land on buttons and rows only).
+    The page itself (id "page") asks the app to recount its spare rows (VegasApp.fit, R2) whenever its size or its
+    content height changes: a single count after a rotation could still see the old layout."""
 
     can_focus = False
+
+    def _refit(self) -> None:
+        if self.id == "page" and self.is_attached:
+            self.app.call_after_refresh(self.app.fit)
+
+    def watch_virtual_size(self, old, new) -> None:
+        self._refit()
+
+    def on_resize(self, ev) -> None:
+        self._refit()
 
 
 class Button(_Button):
@@ -76,6 +94,37 @@ class Button(_Button):
     def __init__(self, label=None, *a, **kw):
         super().__init__(Text(label) if isinstance(label, str) else label, *a, **kw)
         self.active_effect_duration = 0
+
+
+def state_label(name: str, state: str, inside: int) -> str:
+    """Ruling R4: "name state" when it fits `inside` cells, else "name\nstate" (a state is never split; unknown width
+    (inside <= 0, not laid out yet): one line)."""
+    one = f"{name} {state}"
+    return one if inside <= 0 or cell_len(one) <= inside else f"{name}\n{state}"
+
+
+class StateButton(Button):
+    """A button that shows a name and a state (Away off, Charge 80 %, Hotspot on · wifi): ruling R4. The line break is
+    computed from the button's inside width (its width less Button's one-cell padding each side), never left to
+    Textual's wrap, and recomputed when the width changes (text size, rotation)."""
+
+    PAD = 2
+
+    def __init__(self, name: str, state: str, **kw):
+        self.what, self.state = name, state
+        super().__init__(Text(f"{name} {state}", no_wrap=True, overflow="crop"), **kw)
+
+    def set_state(self, state: str) -> None:
+        self.state = state
+        self.relabel()
+
+    def relabel(self) -> None:
+        text = state_label(self.what, self.state, self.size.width - self.PAD)
+        if self.label.plain != text or not self.label.no_wrap:
+            self.label = Text(text, no_wrap=True, overflow="crop")
+
+    def on_resize(self, ev) -> None:
+        self.relabel()
 
 
 def styled(text: str, role=None, bold=False) -> Text:
@@ -288,6 +337,8 @@ class VegasApp(App):
                 self._wake_check()
             if b"rotation" in names:     # vegas-rotate wrote it (from a key, the menu, a shell): no fork, no gather
                 self.rotation_changed()
+            if b"kbd-window" in names:   # uictl's tmux hook: another window of "main" is in front
+                self.front_changed()
         except Exception:   # never let a late event (app closing) raise inside the event loop
             pass
 
@@ -332,6 +383,43 @@ class VegasApp(App):
             self.q("#msg", Static).update(styled(text, role))
         except Exception:
             pass
+        self.call_after_refresh(self.fit)      # a longer message takes rows from the spare space (R2)
+
+    # --- spare rows (ruling R2) -------------------------------------------------------------------------------------
+    FLEX = None          # selector of the widget that takes the spare rows upright (inside the page Scroll #page)
+    FLEX_MIN = 0         # its smallest height; below that the page scrolls
+
+    def fit(self) -> None:
+        """Upright: size FLEX so the page content ends on the last row of the page (message line last, buttons at the
+        bottom); never below FLEX_MIN (then the page scrolls as before). Landscape: flex_wide(). Textual's fr units
+        cannot do this inside a scrolling page (an fr child of an auto-height column resolves against the whole
+        viewport), so the rows are counted here."""
+        if not self.FLEX:
+            return
+        try:
+            page, flex = self.q("#page"), self.q(self.FLEX)
+        except Exception:
+            return
+        if self.has_class("wide"):
+            self.flex_wide(flex)
+            return
+        view = page.scrollable_content_region.height
+        if view <= 0:
+            return
+        bottom = max((c.virtual_region.bottom + c.styles.margin.bottom for c in page.children if c.display),
+                     default=0)
+        cur = flex.outer_size.height
+        h = max(self.FLEX_MIN, cur + view - bottom)
+        if h != cur or str(flex.styles.height) != str(h):
+            flex.styles.height = h
+
+    def flex_wide(self, flex) -> None:
+        """Landscape layouts are unchanged by R2: the FLEX widget goes back to its own height."""
+        flex.styles.height = "auto"
+
+    def front_changed(self) -> None:
+        """/run/vegas-ui/kbd-window was written (the tmux hook: the window in front of "main" changed)."""
+        pass
 
     # --- key highlight ---------------------------------------------------------------------------------------------
     def set_hl(self, on: bool) -> None:
@@ -362,11 +450,13 @@ class VegasApp(App):
     # --- layout ---------------------------------------------------------------------------------------------------
     def on_resize(self, ev: events.Resize) -> None:
         self.set_class(ev.size.width > 100, "wide")   # landscape 127-132 columns: two columns (Textual has no breakpoints)
+        self.call_after_refresh(self.fit)
 
     def on_mount(self) -> None:
         uictl.set_highlight(self.UI_NAME, False)    # also makes /run/vegas-ui for the watch
         self.set_class(self.size.width > 100, "wide")
         self._watch_state()
+        self.call_after_refresh(self.fit)
 
     def on_unmount(self) -> None:
         self._unwatch_state()

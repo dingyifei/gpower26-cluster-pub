@@ -133,15 +133,121 @@ open(R + "/menu-answer", "w").write("Reboot to Android\n"); clear(); emitted()
 key(pmic, E.KEY_POWER, hold=1.0); time.sleep(1.0)
 check("menu Reboot to Android -> (dryrun) systemctl reboot", until(lambda: "DRYRUN: systemctl reboot" in open(R + "/daemon.log").read(), 3))
 time.sleep(2.5)   # the reboot row's sync (capped at 2 s) holds the daemon's main loop; nothing else to wait for
-# workspace 2 -> full-prog
+# workspace 2 -> full-prog, opened from on (R7: a menu opened from the dark would cancel to the glance; the
+# reboot row's capped sync + 2.5 s above can let the test's 3 s idle reach off first)
+if st() in ("off", "glance"):
+    if st() == "off": key(pmic, E.KEY_POWER); until(lambda: st() == "glance" and bl() != "0", 2.5)
+    key(kpd, E.KEY_VOLUMEUP); until(lambda: st() == "on", 2)
+elif st() == "dim": key(kpd, E.KEY_VOLUMEUP); until(lambda: st() == "on", 2)
 open(R + "/ws", "w").write("2"); open(R + "/menu-answer", "w").write("Cancel\n"); clear()
+open(R + "/menu-hold", "w").close()   # the stub stays open until the keys are in (its 0.5 s answer raced them)
 key(pmic, E.KEY_POWER, hold=1.0); time.sleep(0.1)
 key(kpd, E.KEY_VOLUMEUP); time.sleep(0.1); key(pmic, E.KEY_POWER); time.sleep(0.2)
 check("menu variant full-prog on ws 2", "menu full-prog upright" in cmds()); print(cmds())
 check("menu keys: vol UP, power ENTER", emitted()[-2:] == ["KEY_UP", "KEY_ENTER"])
-time.sleep(0.6)
+os.unlink(R + "/menu-hold"); time.sleep(0.6)
 check("menu Cancel -> on", until(lambda: st() == "on"))
 os.unlink(R + "/ws")
+
+# ---- R7: menu Cancel goes back where the menu was opened (test timers: glance 2 s, idle off 3 s) ----
+HOLD = R + "/menu-hold"; open(R + "/menu-answer", "w").write("Cancel\n")
+def ctl(line):
+    with open(R + "/run/vegas-ui/ctl", "w") as f: f.write(line + "\n")
+def to_off_now(): ctl("screen off"); return until(lambda: st() == "off" and bl() == "0")
+def wake_on():
+    key(pmic, E.KEY_POWER); until(lambda: st() == "glance" and bl() != "0", 2.5)
+    key(kpd, E.KEY_VOLUMEUP); return until(lambda: st() == "on" and bl() != "0", 2)
+def open_menu():   # Power hold, menu stays open while HOLD exists
+    open(HOLD, "w").close(); clear(); key(pmic, E.KEY_POWER, hold=1.0)
+    return until(lambda: st() == "menu", 1.5)
+# (a) from the glance: back to the glance, touch muted again, a fresh glance timer
+to_off_now(); key(pmic, E.KEY_POWER); until(lambda: st() == "glance" and bl() != "0", 2)
+time.sleep(1.2)                                   # most of the (test) 2 s glance used up before the hold
+open_menu()
+check("R7 glance hold -> full menu, lit, menu takes touch (as built)",
+      st() == "menu" and "menu full upright" in cmds() and bl() != "0" and not grabbed("ILITEK_TDDI"))
+os.unlink(HOLD); until(lambda: st() != "menu", 2)
+ok = until(lambda: st() == "glance" and bl() != "0" and os.path.exists(R + "/glance-mapped"), 2); tl = time.time()
+check("R7 cancel from glance -> glance, lit, glance window up", ok)
+check("R7 cancel from glance -> touch muted again", grabbed("ILITEK_TDDI"))
+time.sleep(1.4)
+check("R7 glance timer restarted on return (still glance 1.4 s later)", st() == "glance")
+check("R7 ... then the glance times out -> off", until(lambda: st() == "off" and bl() == "0", 1.6))
+check("R7 glance after cancel lasted ~2 s (%.1f s)" % (time.time() - tl), 1.6 < time.time() - tl < 3.2)
+# (b) from off (dark): back to the glance, dark until the glance window maps
+to_off_now(); open_menu()
+check("R7 off hold -> full menu", st() == "menu" and "menu full upright" in cmds())
+open(R + "/glance-delay", "w").write("1.0\n")
+os.unlink(HOLD); until(lambda: st() != "menu", 2); time.sleep(0.3)
+check("R7 cancel from off -> glance, dark until mapped", st() == "glance" and bl() == "0")
+check("R7 cancel from off -> glance lit once mapped, touch muted",
+      until(lambda: st() == "glance" and bl() != "0", 2) and grabbed("ILITEK_TDDI"))
+os.unlink(R + "/glance-delay")
+until(lambda: st() == "off", 3)
+# (b2) review: Power hold inside a menu opened from the glance = Esc (bemenu exits 1, no output) -> the glance
+to_off_now(); key(pmic, E.KEY_POWER); until(lambda: st() == "glance" and bl() != "0", 2.5)
+time.sleep(1.2); open_menu(); emitted()
+open(R + "/menu-esc", "w").close()
+key(pmic, E.KEY_POWER, hold=1.0); time.sleep(0.2)
+check("R7 hold in the menu -> ESC to the menu", "KEY_ESC" in emitted() and st() == "menu")
+os.unlink(HOLD); until(lambda: st() != "menu", 2)
+ok = until(lambda: st() == "glance" and bl() != "0", 2); tl = time.time()
+check("R7 Esc from a glance menu -> glance, lit, touch muted", ok and grabbed("ILITEK_TDDI"))
+time.sleep(1.4)
+check("R7 Esc: fresh glance timer (still glance 1.4 s later)", st() == "glance")
+os.unlink(R + "/menu-esc"); until(lambda: st() == "off", 2)
+# (b3) review: Cancel tapped by finger, the menu's answer arrives before the lift: dark and still the menu until
+# the finger is up, then the glance with the mute in place before the backlight comes on
+def finger(down, px=300, py=300):
+    if down:
+        for ev in [(E.EV_ABS, E.ABS_MT_SLOT, 0), (E.EV_ABS, E.ABS_MT_TRACKING_ID, 9), (E.EV_ABS, E.ABS_MT_POSITION_X, px * 2),
+                   (E.EV_ABS, E.ABS_MT_POSITION_Y, py * 2), (E.EV_KEY, E.BTN_TOUCH, 1)]: touch.write(*ev)
+    else:
+        touch.write(E.EV_ABS, E.ABS_MT_TRACKING_ID, -1); touch.write(E.EV_KEY, E.BTN_TOUCH, 0)
+    touch.syn()
+open_menu(); finger(True); time.sleep(0.2); os.unlink(HOLD); time.sleep(1.2)
+check("R7 finger still down after Cancel: dark, not yet the glance", bl() == "0" and st() == "menu")
+seen = []
+def lit_glance():
+    if st() == "glance" and bl() != "0": seen.append(grabbed("ILITEK_TDDI")); return True
+    return False
+t0 = time.time(); finger(False); ok = until(lit_glance, 2.5)
+print("  lit glance after lift: %s in %.2f s, muted when lit: %s; now %s bl %s" % (ok, time.time() - t0, seen, st(), bl()))
+check("R7 ... lift -> glance, touch already muted when lit", ok and seen and all(seen))
+until(lambda: st() == "off", 3)
+# (c) from on and from dim: back to on, touch live
+wake_on(); open_menu(); os.unlink(HOLD)
+check("R7 cancel from on -> on, lit, touch live", until(lambda: st() == "on" and bl() != "0", 2) and not grabbed("ILITEK_TDDI")
+      and not os.path.exists(R + "/glance-mapped"))
+check("R7 idle on -> dim", until(lambda: st() == "dim", 3))
+open_menu(); os.unlink(HOLD)
+check("R7 cancel from dim -> on, full backlight, touch live",
+      until(lambda: st() == "on" and bl() == "889", 2) and not grabbed("ILITEK_TDDI"))
+# (d) the idle close (test: 3 s) still ends in the dark, whether opened from on or from the dark
+open_menu(); t0 = time.time(); ok = until(lambda: st() == "off" and bl() == "0", 4.5); dt = time.time() - t0
+check("R7 idle close from on -> off (%.1f s after the menu opened)" % dt, ok and 2.5 < dt and grabbed("ILITEK_TDDI"))
+open(R + "/menu-late", "w").close(); open(R + "/menu-answer", "w").write("Home\n"); clear()
+homes = open(R + "/daemon.log").read().count("menu: Home")
+open_menu(); t0 = time.time()
+check("R7 idle close from off -> off, not the glance",
+      until(lambda: st() == "off" and bl() == "0", 4.5) and 2.5 < time.time() - t0 and grabbed("ILITEK_TDDI"))
+time.sleep(0.6); check("R7 ... and stays off", st() == "off")
+check("R7 ... the killed menu's late answer (Home) is dropped", open(R + "/daemon.log").read().count("menu: Home") == homes
+      and "select-window -t main:0" not in cmds() and st() == "off" and bl() == "0")
+os.unlink(HOLD); os.unlink(R + "/menu-late"); open(R + "/menu-answer", "w").write("Cancel\n")
+# (e) Away locked: unchanged, the short menu's Cancel goes to off (from off and from the glance)
+open(R + "/etc/vegas/away", "w").close()
+open_menu()
+check("R7 locked off hold -> short menu, touch muted", "menu short upright" in cmds() and grabbed("ILITEK_TDDI"))
+os.unlink(HOLD)
+check("R7 locked cancel from off -> off", until(lambda: st() == "off" and bl() == "0", 2) and grabbed("ILITEK_TDDI"))
+key(pmic, E.KEY_POWER); until(lambda: st() == "glance" and bl() != "0", 2.5)
+open_menu(); os.unlink(HOLD)
+check("R7 locked cancel from glance -> off (not the glance)", until(lambda: st() == "off" and bl() == "0", 2)
+      and "menu short upright" in cmds())
+time.sleep(0.5); check("R7 ... stays off", st() == "off" and bl() == "0")
+os.unlink(R + "/etc/vegas/away")
+wake_on()
 # ctl brightness
 with open(R + "/run/vegas-ui/ctl", "w") as f: f.write("brightness up\n")
 time.sleep(0.4)

@@ -8,19 +8,23 @@
   vegas-status --ruler on|off|status   one-off camera-hole ruler in the running strip (see RULER below)
   vegas-status --ruler-once [width]    the ruler's blocks as JSON (tests)
 
-Strip (one line, 36 logical px tall over the camera band; nothing in the middle where the camera hole is):
+Strip (one line, 36 logical px tall over the camera band; nothing drawn over the camera hole, see HOLE below):
   left : 09:14 vegas5 MAIN [AWAY]         (RESCUE amber off the main root; "rescue pending" amber while /rescue)
-         AWAY turns into a red "AWAY ssh open" (upright "SSH OPEN") while Away is on but /run/vegas-ui/away-ssh says
-         SSH is open on Wi-Fi (ruling B1: the badge never claims protection that is not in force)
+         AWAY turns into a red "AWAY ssh open" (upright "SSH OPEN", "SSH" beside resc / RESC) while Away is on but
+         /run/vegas-ui/away-ssh says SSH is open on Wi-Fi (ruling B1: the badge never claims protection not in force)
   right: wifi usb 41° [cap 80%] 78%▲[100] [AP 2] kbd
          words dim when the link is down; 78% amber <=15 red <=5; ▲ charging, = holding, ▼ on battery; amber 100
          after the glyph only while charge-to-full is on (ruling 3a: no band top in normal running); AP = Wi-Fi
          hotspot device count or "AP usb" for USB sharing; kbd = on-screen keyboard: a slate badge like MAIN while
          shown, plain dim "kbd" while hidden (ruling 3b). An amber fill means something switched on that must not be
          forgotten: AWAY, AP, RESCUE, rescue pending (amber text), charge to full (amber 100).
-  Upright each side gets half the strip minus the camera-hole gap (~18 characters), so things drop in a fixed order
-  (strip_layout): left = hostname first; right = AP count, "usb", the cap block (SoC turns red), "wifi".
-  Normal upright: "09:14 vegas5 MAIN   (hole)   wifi 41° 78%▲ kbd"; rotated (796 wide) everything shows:
+  Upright the camera hole forbids x 166-194 logical (HOLE below): the left text gets x 20-166, the right group
+  x 194-340 (18 characters each), so things shorten or drop in a fixed order (strip_layout): left = hostname
+  first; right = AP count, "usb", the cap block (SoC turns red), "kbd" -> "k", "wifi", the SoC temperature. No
+  amber item ever drops upright (rescue word, RESC, AWAY / SSH, AP, amber 100): the right budget always holds
+  "100%▲100 AP k", and next to rescue the red badge shortens to "SSH" instead.
+  Normal upright: "09:14 vegas5 MAIN   (hole)   wifi 41° 78%▲ k" (the full "kbd" would push "wifi" 6 px into the
+  band; wifi stays: it is the Network tap); rotated (796 wide) everything shows:
   "09:14 vegas5 MAIN ... wifi usb 41° 78%▲ kbd".
   taps : left half -> Home (tmux main:0), wifi/usb -> Network (main:1), kbd -> show/hide wvkbd, others -> Home.
   The feed writes its pid to /run/vegas-ui/strip.pid; vegasui.uictl sends it SIGUSR1 after every keyboard change
@@ -67,15 +71,28 @@ def _env_num(name, default):
         return default
 
 
-# [BUILDER CHOICE] strip geometry in logical px; tune on #5 with grim (phone test plan).
-# CHAR_PX: advance of "monospace 10" = DejaVu Sans Mono (13.33 px em x 0.602), measured 8.03 in the VM's headless
-# sway 1.10.1 at scale 3; ▲/▼ come out ~1.5 cells wide (WIDE). PAD: the config's status_edge_padding. HOLE: width
-# kept free around the centre of the upright strip, where the camera hole is (design page: "in the middle of one
-# short side"; its size is unmeasured, 20 = 60 px = 3.9 mm). Rotated, the hole is at a short side, not in the strip.
-# SAFETY: slack for a right group wider than estimated; the left block's min_width leaves it free, so the left text
-# starts at PAD + SAFETY (the upright left budget subtracts it, or the left text reaches into the hole gap).
+# Strip geometry in logical px (x from the panel's left edge, upright 360 wide).
+# CHAR_PX: advance of "monospace 10" = DejaVu Sans Mono (1233/2048 em of 13.33 px = 8.0273); swaybar 1.10.1 makes a
+# block ceil(text width) logical px wide, and blocks of N plain characters measured in the VM (headless, scale 3)
+# give 8.0271 < advance <= 8.0294, so 8.03 is an upper bound. WIDE: ▲/▼ (and °) in cells: DejaVu Sans Mono has them,
+# measured exactly one cell (30 A + 6 triangles = 36 A = 289). TRIM: swaybar's per-block ceil would cost up to ~0.9
+# px per block (wifi 32.11 -> 33), so each right block's first character carries letter_spacing TRIM_LS (pango 1.56
+# applies only its trailing half there), which narrows the block by more than TRIM (measured 0.328-0.355 for -800):
+# wifi, " 41°", " 78%▲", " kbd " are 32+32+40+40 instead of 33+33+41+41. min_width = ceil(N x CHAR_PX - TRIM) is
+# still >= what swaybar draws; a leading blank counts as TRIM_HI (> the trim's 0.355) narrower.
+# PAD: where the left text starts. RPAD: the right edge = the config's status_edge_padding (designer ruling 1 after
+# R6: 18, so the normal upright strip keeps "wifi ... kbd" in full; back to 20 means editing both, no code change).
+# HOLE (R6, measured on #5 with the ruler): the camera hole lies within x 170-190 (510-570 px at scale 3), centred
+# on HOLE_X 180. Nothing may be drawn in the forbidden band HOLE_X +- HOLE/2 = x 166-194 (498-582 px) in any
+# upright state; rotated (90/270) the hole is at a short side, not in the strip. Px 582 is x 194.0-194.33 and a glyph
+# such as "w" inks the first pixel of its block, so right ink must start at x >= 194 + 1/3 (one px at scale 3). To
+# make every position exact, each right block gets min_width = its width (align right: a narrower text only leaves
+# blank on its left) and the left block takes the rest, so the left text always starts at PAD + SAFETY and the right
+# group's ink at (width - RPAD - right width + its leading blank). A leading space with no fill draws nothing, so it
+# may sit inside the band. SAFETY: extra left inset (0: the exact widths leave no estimate error to absorb).
 STRIP = {k: _env_num("VEGAS_STRIP_" + k, v) for k, v in
-         {"CHAR_PX": 8.03, "WIDE": 1.5, "PAD": 20, "HOLE": 20, "SAFETY": 2}.items()}
+         {"CHAR_PX": 8.03, "WIDE": 1.0, "TRIM": 0.3, "TRIM_HI": 0.4, "TRIM_LS": 800, "PAD": 20, "RPAD": 18,
+          "HOLE_X": 180, "HOLE": 28, "SAFETY": 0}.items()}
 
 
 # ======================================================================================== values
@@ -124,40 +141,62 @@ class Text:
     def __len__(self):
         return sum(len(t) for t, *_ in self.p)
 
-    def px(self):
-        """Width in logical px (monospace; the triangles fall back to a wider glyph)."""
-        return sum(STRIP["CHAR_PX"] * (STRIP["WIDE"] if ch in "▲▼" else 1) for t, *_ in self.p for ch in t)
+    def px(self, trim=False):
+        """Width in logical px (monospace, ▲/▼ WIDE cells); trim: the first character carries letter_spacing
+        -TRIM_LS (markup(trim=True)), which narrows a text of 2+ characters by at least TRIM."""
+        w = sum(STRIP["CHAR_PX"] * (STRIP["WIDE"] if ch in "▲▼" else 1) for t, *_ in self.p for ch in t)
+        return w - STRIP["TRIM"] if trim and len(self) >= 2 else w
 
-    def markup(self):
-        out = []
+    def lead_px(self, trim=False):
+        """Leading blank that draws nothing (spaces with no background fill), in logical px (a lower bound)."""
+        n = 0
         for t, fg, bg, bold in self.p:
+            if bg:
+                break
+            k = len(t) - len(t.lstrip(" "))
+            n += k
+            if k < len(t):
+                break
+        return max(0, n * STRIP["CHAR_PX"] - (STRIP["TRIM_HI"] if trim and n and len(self) >= 2 else 0))
+
+    def markup(self, trim=False):
+        out = []
+        for i, (t, fg, bg, bold) in enumerate(self.p):
             a = (['foreground="%s"' % fg] if fg else []) + (['background="%s"' % bg] if bg else []) + \
                 (['weight="bold"'] if bold else [])
-            out.append("<span %s>%s</span>" % (" ".join(a), esc(t)) if a else esc(t))
+            body = esc(t)
+            if trim and i == 0 and t and len(self) >= 2:
+                body = '<span letter_spacing="-%d">%s</span>%s' % (STRIP["TRIM_LS"], esc(t[0]), esc(t[1:]))
+            out.append("<span %s>%s</span>" % (" ".join(a), body) if a else body)
         return "".join(out)
 
 
 def strip_layout(s, now, width, rshrink=0, lshrink=0):
     """(left Text, [(name, Text)]) for one strip.
-    lshrink (left side): 1 drop the hostname, 2 "rescue pending" -> "rescue", 3 drop MAIN (RESCUE -> RESC) while AWAY is shown,
-    4 the red "AWAY ssh open" -> "SSH OPEN", 5 drop RESC next to it (the open SSH is the more urgent word).
-    rshrink (right side, cumulative): 1 AP device count, 2 the usb word, 3 the cap block (the SoC temperature turns
-    red instead: red = a limit is active), 4 the wifi word, 5 "kbd" -> "k", 6 the AP badge. The band top (amber 100)
-    shows only while charge-to-full is on and is never dropped. Rotated (796 wide) everything fits."""
+    lshrink (left side): 1 drop the hostname, 2 "rescue pending" -> "rescue", 3 while AWAY is shown: drop MAIN,
+    RESCUE -> RESC, "rescue" -> "resc", 4 the red "AWAY ssh open" -> "SSH OPEN", 5 "SSH OPEN" -> "SSH" (next to
+    resc / RESC: "23:59 RESC SSH" fits; the amber rescue word is never dropped).
+    rshrink (right side): 1 AP device count, 2 the usb word, 3 the cap block (the SoC temperature turns red
+    instead: red = a limit is active), 4 "kbd" -> "k" to keep the wifi word (the Network tap; this is what normal
+    upright running shows), 5 when even that is too wide: drop the wifi word and give "kbd" back, 6 "kbd" -> "k",
+    7 the SoC temperature (before the amber AP badge: an amber item must not be forgotten), 8 the AP badge (a guard
+    only: "100%▲100 AP k" always fits upright). The band top (amber 100) shows only while charge-to-full is on and
+    is never dropped. Rotated (796 wide) everything fits."""
     left = Text((now, None, None, True))
     if s["rescue"]:
-        left.add(" ").add("rescue" if lshrink >= 2 else "rescue pending", AMBER)
+        left.add(" ").add("rescue pending" if lshrink < 2 else "resc" if lshrink >= 3 and s["away"] else "rescue",
+                          AMBER)
     else:
         if lshrink < 1:
             left.add(" " + s["host"])
         if s["role_root"] == "main":
             if not (lshrink >= 3 and s["away"]):
                 left.badge("MAIN")
-        elif not (lshrink >= 5 and s.get("away_open")):
+        else:
             # "RESCUE AWAY" upright would reach into the hole gap: shorten the badge rather than drop it
             left.badge("RESC" if lshrink >= 3 and s["away"] else "RESCUE", "amber")
     if s["away"] and s.get("away_open"):     # B1: Away is on but SSH is open on Wi-Fi: red, never a plain AWAY
-        left.badge("SSH OPEN" if lshrink >= 4 else "AWAY ssh open", "red")
+        left.badge("SSH" if lshrink >= 5 else "SSH OPEN" if lshrink >= 4 else "AWAY ssh open", "red")
     elif s["away"]:
         left.badge("AWAY", "amber")
 
@@ -165,7 +204,7 @@ def strip_layout(s, now, width, rshrink=0, lshrink=0):
     show_ap = h and rshrink < RSHRINK_MAX
     right = []
     net = Text()
-    if rshrink < 4:
+    if rshrink < 5:
         net.add("wifi", None if s["wifi"]["up"] else DIM)
     if rshrink < 2:
         net.add(" usb" if len(net) else "usb", None if s["usb"]["link"] else DIM)
@@ -174,7 +213,8 @@ def strip_layout(s, now, width, rshrink=0, lshrink=0):
     t, cap = s["soc_t"], s["cap"]
     capped = bool(cap and cap[0] < 100)
     tcol = RED if capped and rshrink >= 3 else soc_colour(t)
-    right.append(("soc", Text((" %s°" % ("?" if t is None else t), tcol, None, False))))
+    if rshrink < 7:
+        right.append(("soc", Text((" %s°" % ("?" if t is None else t), tcol, None, False))))
     if capped and rshrink < 3:
         right.append(("cap", Text((" cap %d%%" % cap[0], RED, None, False))))
     soc, g = s["bat"]["soc"], s["guard"]
@@ -188,35 +228,45 @@ def strip_layout(s, now, width, rshrink=0, lshrink=0):
         label = "AP" if rshrink >= 1 else ("AP usb" if h["kind"] == "usb" else
                                            "AP %s" % (h["devices"] if h["devices"] is not None else ""))
         right.append(("ap", Text().badge(label.strip(), "amber")))
-    right.append(("kbd", Text().badge("k" if rshrink >= 5 else "kbd", "normal" if s["kbd"] else "plain")))
+    short_kbd = rshrink == 4 or rshrink >= 6
+    right.append(("kbd", Text().badge("k" if short_kbd else "kbd", "normal" if s["kbd"] else "plain")))
     return left, right
 
 
-RSHRINK_MAX = 6
+RSHRINK_MAX = 8
 LSHRINK_MAX = 5
+
+
+def hole_band():
+    """(left, right) x of the upright forbidden band (R6: x 166-194 logical)."""
+    return STRIP["HOLE_X"] - STRIP["HOLE"] / 2, STRIP["HOLE_X"] + STRIP["HOLE"] / 2
 
 
 def strip_blocks(s, now, width):
     """i3bar blocks for one strip, fitted to the panel width (360 upright, 796 rotated). swaybar right-aligns all
-    blocks; the left block's min_width (logical px, checked in the VM) pads it out so its text starts at the left."""
-    pad, safety = STRIP["PAD"], STRIP["SAFETY"]
+    blocks (from width - RPAD); every block has a min_width (logical px, checked in the VM): each right block its
+    width (trimmed, rounded up), the left block the rest, so the left text starts exactly at PAD + SAFETY."""
+    pad, rpad, safety = STRIP["PAD"], STRIP["RPAD"], STRIP["SAFETY"]
     upright = width < 400
-    side = width / 2 - STRIP["HOLE"] / 2 - pad          # upright: room on each side of the camera hole
-    lside = side - safety                               # the left text starts at pad + safety (min_width below)
-    room = width - 2 * pad - safety                     # rotated: room for both sides together
+    hl, hr = hole_band()
+    lside = hl - pad - safety                           # upright: left text from pad + safety up to the band
+    rside = width - rpad - hr - 1 / 3                   # upright: right ink from past the band (px 583) to width - rpad
+    room = width - pad - rpad - safety                  # everything together
     lshrink = rshrink = 0
     while True:
         left, right = strip_layout(s, now, width, rshrink, lshrink)
-        lpx, rpx = left.px(), sum(t.px() for _, t in right)
+        rw = [int(-(-t.px(True) // 1)) for _, t in right]   # each right block's min_width: >= swaybar's width
+        lpx, rpx = left.px(), sum(rw)
+        rink = rpx - right[0][1].lead_px(True)          # the right group's drawn part
         if upright and lpx > lside and lshrink < LSHRINK_MAX:
             lshrink += 1
-        elif (rpx > side if upright else lpx + rpx > room) and rshrink < RSHRINK_MAX:
+        elif (rink > rside if upright else lpx + rpx > room) and rshrink < RSHRINK_MAX:
             rshrink += 1
         else:
             break
     blocks = [{"name": "home", "full_text": left.markup(), "min_width": max(0, int(room - rpx)), "align": "left"}]
-    for name, t in right:
-        blocks.append({"name": name, "full_text": t.markup()})
+    for (name, t), mw in zip(right, rw):
+        blocks.append({"name": name, "full_text": t.markup(True), "min_width": mw, "align": "right"})
     for b in blocks:
         b.update(markup="pango", separator=False, separator_block_width=0)
     return blocks
@@ -230,20 +280,24 @@ RULER_SIZE = 5632                     # label size in 1/1024 pt (5.5 pt: two dig
 
 def ruler_blocks(width):
     """Cells of exactly RULER_CELL logical px, right-aligned against status_edge_padding like the strip, so upright
-    (360 - 20 = 340 = 34 cells) cell n spans x = 10n .. 10n+10 from the panel's left edge, labelled n. Rotated, the
-    room is not a multiple of 10, so the left end loses a few px and the labels are only approximate there (the
-    hole is not in the strip then)."""
-    n = int((width - STRIP["PAD"]) // RULER_CELL)
-    lead = (width - STRIP["PAD"]) - n * RULER_CELL
+    cells end where the room's last whole cell ends and a tiny blank block fills the rest up to status_edge_padding
+    (upright 360 - 18 = 342: 34 cells to x 340, then 2 px), so cell n spans x = 10n .. 10n+10 from the panel's left
+    edge, labelled n, whatever RPAD is."""
+    n = int((width - STRIP["RPAD"]) // RULER_CELL)
+    trail = (width - STRIP["RPAD"]) - n * RULER_CELL
     blocks = []
     for i in range(n):
-        x = lead + i * RULER_CELL
+        x = i * RULER_CELL
         label = int(round(x / RULER_CELL))
         fg = AMBER if label % 5 == 0 else TEXT
         blocks.append({"name": "ruler", "instance": str(label), "min_width": RULER_CELL, "align": "center",
                        "background": RULER_BG[label % 2],
                        "full_text": '<span size="%d" foreground="%s"%s>%d</span>'
                                     % (RULER_SIZE, fg, ' weight="bold"' if label % 5 == 0 else "", label),
+                       "markup": "pango", "separator": False, "separator_block_width": 0})
+    if trail > 0:   # a 1 pt space is narrower than 1 px, so min_width alone sets this block's width
+        blocks.append({"name": "ruler", "instance": "trail", "min_width": trail, "align": "right",
+                       "full_text": '<span size="1024"> </span>',
                        "markup": "pango", "separator": False, "separator_block_width": 0})
     return blocks
 

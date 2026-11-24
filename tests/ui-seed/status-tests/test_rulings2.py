@@ -69,7 +69,7 @@ class StripAwayOpen(unittest.TestCase):
                     os.remove(root + "/etc/vegas/root-role")
                 b = blocks(root, 360)
                 n = len(text_of(b[0]))
-                self.assertLessEqual(n * 8.03, 360 / 2 - 10 - 20 - 2 + 0.5, (ssh, rescue, text_of(b[0])))
+                self.assertLessEqual(20 + n * 8.03, 166, (ssh, rescue, text_of(b[0])))   # R6 band x 166-194
 
 
 class GlanceAwayOpen(unittest.TestCase):

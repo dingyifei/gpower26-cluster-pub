@@ -14,7 +14,10 @@ while :; do
   /usr/lib/vegas/vegas-session
   start=$(cut -d. -f1 /proc/uptime)
   # dpi-aware=no: a rotation must not change the font size; no blinking cursor (power, D2)
+  # colours: the UI's one background (ruling R1, theme.BG/TEXT; foot's own dark grey default showed as a band under the
+  # last text row)
   foot -a vegas-term -o "font=JetBrains Mono:size=$size" -o dpi-aware=no -o cursor.blink=no \
+       -o colors.background=0b0f14 -o colors.foreground=d5dbe3 \
        -o touch.long-press-delay=400 tmux attach -t main &
   echo $! > $UI/term.pid
   wait $!

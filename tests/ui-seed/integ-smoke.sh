@@ -140,6 +140,13 @@ swaymsg -q '[app_id="testprog"] kill'; swaymsg -q 'workspace number 1'; sleep 0.
 tmux select-window -t main:0; sleep 1
 echo 'brightness up' > /run/vegas-ui/ctl; sleep 0.7
 ok "ctl brightness up -> vegas-keys wrote the backlight (1200)" '[ "$(cat $K/sys/class/backlight/ktd3136-bl/brightness)" = 1200 ] && [ "$(cat /run/vegas-ui/brightness)" = 1200 ]'
+# R7 (24 Nov): a menu opened from "on" cancels back to "on", lit, touch live
+echo menu > /run/vegas-ui/ctl
+ok "R7: menu from on is up" 'wait_for "pgrep -x bemenu >/dev/null" 20 && [ "$(cat /run/vegas-ui/state)" = menu ]'
+sleep 0.5; wtype -k Escape
+ok "R7: Esc from a menu opened on 'on' -> state on" 'wait_for "[ \"\$(cat /run/vegas-ui/state)\" = on ]" 20'
+ok "R7: touch not muted with the screen on (no sway-mute marker)" 'sleep 0.5; [ ! -e /run/vegas-ui/touch-sway-muted ]'
+ok "R7: lit after that menu" '[ "$(cat $K/sys/class/backlight/ktd3136-bl/brightness)" = 1200 ]'
 echo 'screen off' > /run/vegas-ui/ctl; sleep 0.7
 ok "screen off: backlight 0, state off" '[ "$(cat $K/sys/class/backlight/ktd3136-bl/brightness)" = 0 ] && [ "$(cat /run/vegas-ui/state)" = off ]'
 echo glance > /run/vegas-ui/ctl
@@ -151,9 +158,12 @@ ok "power menu (bemenu) up" 'wait_for "pgrep -x bemenu >/dev/null" 20'
 sleep 1.2; grim $SH/07-menu.png
 ok "menu: glance closed, state menu" '[ "$(cat /run/vegas-ui/state)" = menu ] && ! swaymsg -t get_tree | grep -q "\"app_id\": \"vegas-glance\""'
 wtype -k Escape
-ok "Esc cancels -> state on" 'wait_for "[ \"\$(cat /run/vegas-ui/state)\" = on ]" 20'
-ok "touch not muted with the screen on (no sway-mute marker)" 'sleep 0.5; [ ! -e /run/vegas-ui/touch-sway-muted ]'
-ok "lit after the menu" '[ "$(cat $K/sys/class/backlight/ktd3136-bl/brightness)" = 1200 ]'
+# R7: a menu opened from the glance cancels back to the glance, touch muted, lit once the glance maps
+ok "R7: Esc from a menu opened on the glance -> state glance" 'wait_for "[ \"\$(cat /run/vegas-ui/state)\" = glance ]" 20'
+ok "R7: glance window back" 'wait_for "swaymsg -t get_tree | grep -q \"\\\"app_id\\\": \\\"vegas-glance\\\"\"" 20'
+ok "R7: touch muted in the glance (sway-mute marker)" 'sleep 0.5; [ -e /run/vegas-ui/touch-sway-muted ]'
+ok "R7: glance lit" 'sleep 1.2; [ "$(cat $K/sys/class/backlight/ktd3136-bl/brightness)" = 1200 ]'
+ok "R7: glance times out to off (touch stays muted)" 'wait_for "[ \"\$(cat /run/vegas-ui/state)\" = off ]" 60 && [ -e /run/vegas-ui/touch-sway-muted ]'
 
 # --- rotation: vegas-rotate writes the UI state; Home redraws two columns ---------------------------------------
 # ruling 5 (23 Nov): the stock keyboard finds its landscape layer by itself on #5, so by default a rotation neither
@@ -163,6 +173,7 @@ KB0=$(pgrep -x wvkbd-mobintl)
 /usr/local/sbin/vegas-rotate 90
 ok "vegas-rotate 90 -> rotation 90, rotation-last 90" '[ "$(cat /run/vegas-ui/rotation)" = 90 ] && [ "$(cat /run/vegas-ui/rotation-last)" = 90 ]'
 sleep 6; grim $SH/08-home-landscape.png
+tmux select-window -t main:1; sleep 3; grim $SH/08n-net-landscape.png; tmux select-window -t main:0; sleep 1
 LS=$(tmux display -p -t main '#{window_width}x#{window_height}'); echo "  landscape (Home in front, keyboard down): $LS"
 ok "landscape: stock keyboard not restarted, no -H override (pid $KB0), Home in front has >= 20 rows ($LS)" '[ "$(pgrep -x wvkbd-mobintl)" = "$KB0" ] && ! pgrep -af wvkbd-mobintl | grep -q "H 1[45][04]" && [ "${LS#*x}" -ge 20 ]'
 ok "landscape: Home drew (no traceback)" 'tmux capture-pane -p -t main:0 > $SH/home-landscape.txt; ! grep -q Traceback $SH/home-landscape.txt'
@@ -206,6 +217,36 @@ ok "no vegas-kbd loop: rotation keeps the plain-exec keyboard (pid $OK1)" '[ "$(
 pkill -x wvkbd-mobintl; swaymsg -q exec 'choom -n 0 -- /usr/lib/vegas/vegas-kbd'
 ok "vegas-kbd loop back" 'wait_for "pgrep -x vegas-kbd >/dev/null && pgrep -x wvkbd-mobintl >/dev/null" 20'
 sleep 2
+
+# --- rulings of 24 Nov: one background (R1), each text size's grid with Home/Network drawn (R2, R4) ---------------
+# (last: the four foot restarts take ~40 s, which would let vegas-keys' idle timers darken the screen before the ctl
+# checks above)
+px(){ grim -t ppm -g "$1 1x1" - 2>/dev/null | tail -c 3 | od -An -tx1 | tr -d ' \n'; }   # logical x,y -> rrggbb
+tmux select-window -t main:0; wait_for '[ "$(cat /run/vegas-ui/kbd)" = hidden ]' 20; sleep 2   # keyboard down: bottom visible
+ok "R1: sway output background is 0b0f14 (side gap, $(px 2,400))" '[ "$(px 2,400)" = 0b0f14 ]'
+ok "R1: sway output background below the terminal ($(px 180,790))" '[ "$(px 180,790)" = 0b0f14 ]'
+ok "R1: foot's own pad under the last row is 0b0f14 ($(px 180,778))" '[ "$(px 180,778)" = 0b0f14 ]'
+ok "R1: foot runs with the UI colours" 'tr "\0" " " < /proc/$(cat /run/vegas-ui/term.pid)/cmdline | grep -q "colors.background=0b0f14 -o colors.foreground=d5dbe3"'
+for pc in 8.25:51 7.25:60 6.25:68 5.75:72; do
+  pt=${pc%:*}; cols=${pc#*:}; old=$(cat /run/vegas-ui/term.pid)
+  echo $pt > /run/vegas-ui/fontsize; kill $old
+  wait_for "[ -n \"\$(cat /run/vegas-ui/term.pid 2>/dev/null)\" ] && [ \"\$(cat /run/vegas-ui/term.pid)\" != $old ] && [ \"\$(tmux list-clients -t main 2>/dev/null | wc -l)\" = 1 ]" 80
+  tmux select-window -t main:0; sleep 4
+  G=$(tmux display -p -t main '#{window_width}x#{window_height}'); echo "  text size $pt: Home grid $G"
+  ok "text size $pt: $cols columns, keyboard down ($G)" '[ "${G%x*}" = $cols ] && [ "$(cat /run/vegas-ui/kbd)" = hidden ]'
+  tmux capture-pane -p -t main:0 > $SH/home-$cols.txt
+  ok "text size $pt: Home drew, message line last, buttons at the bottom (Power on the last button row)" '! grep -q Traceback $SH/home-$cols.txt && grep -q "TRAVEL" $SH/home-$cols.txt && [ "$(grep -n "SSH" $SH/home-$cols.txt | head -1 | cut -d: -f1)" -lt "$(( $(grep -n "BRIGHTNESS" $SH/home-$cols.txt | cut -d: -f1) - 2 ))" ]'
+  grim $SH/10-home-$cols.png
+  tmux select-window -t main:1; sleep 3
+  tmux capture-pane -p -t main:1 > $SH/net-$cols.txt
+  ok "text size $pt: Network drew, R5 text" '! grep -q Traceback $SH/net-$cols.txt && grep -qE "Not scanned yet|No (other )?networks in range" $SH/net-$cols.txt'
+  grim $SH/11-net-$cols.png
+done
+old=$(cat /run/vegas-ui/term.pid); echo 7.25 > /run/vegas-ui/fontsize; kill $old
+wait_for "[ \"\$(cat /run/vegas-ui/term.pid 2>/dev/null)\" != $old ] && [ \"\$(tmux list-clients -t main 2>/dev/null | wc -l)\" = 1 ]" 80; sleep 2
+TP=$(cat /run/vegas-ui/term.pid)
+tmux select-window -t main:1; sleep 1
+ok "back to 60 columns" '[ "$(tmux display -p -t main "#{window_width}")" = 60 ]'
 
 # --- D10 and the end state ---------------------------------------------------------------------------------------
 ok "sway alive the whole run" 'kill -0 $SP'

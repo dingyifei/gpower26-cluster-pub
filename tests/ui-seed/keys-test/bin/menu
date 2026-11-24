@@ -1,3 +1,10 @@
 #!/bin/sh
 echo "menu $*" >> "$VEGAS_SYSROOT/cmds"
-sleep 0.5; cat "$VEGAS_SYSROOT/menu-answer" 2>/dev/null; exit 0
+# R7 tests: menu-late: on SIGTERM (vegas-keys closing the menu) still print the answer, a late stale result
+[ -e "$VEGAS_SYSROOT/menu-late" ] && trap 'cat "$VEGAS_SYSROOT/menu-answer" 2>/dev/null; exit 0' TERM
+# R7 tests: while menu-hold exists the menu stays open (idle close, checks while open); then it answers
+while [ -e "$VEGAS_SYSROOT/menu-hold" ]; do sleep 0.1; done
+sleep 0.5
+# menu-esc: answer as bemenu does on Esc (the daemon's Power hold in the menu): no output, exit 1
+[ -e "$VEGAS_SYSROOT/menu-esc" ] && exit 1
+cat "$VEGAS_SYSROOT/menu-answer" 2>/dev/null; exit 0
