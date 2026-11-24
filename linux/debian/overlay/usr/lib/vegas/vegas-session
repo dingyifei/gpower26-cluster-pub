@@ -1,0 +1,41 @@
+#!/bin/sh
+# Creates the phone's tmux session "main" if it is missing (D6 session group, spec 5.1). Idempotent and safe to run
+# from vegas-term, SSH or the Mac at the same time (flock). Windows:
+#   0 home  vegas-home (Textual status page), respawned      1 net   vegas-net (Wi-Fi), respawned
+#   2 sh    login shell, current window at start; `exit` gives a fresh shell in the same place (the terminal is the
+#           home screen; close extra windows from `+ new` with exit as usual)        3 logs  journalctl -f
+# A window that is gone (e.g. `exit` in 2:sh) is put back on the next run: vegas-term runs this before every foot,
+# so the power menu's "Restart terminal" brings the shell window back.
+# The Mac joins as its own grouped session without resizing the phone:
+#   ssh -t root@172.16.42.1 '/usr/lib/vegas/vegas-session; exec tmux new -A -s mac -t main -f ignore-size'
+# Phone-side commands always name the session (-t main / main:0). Look/behaviour of the bar: /etc/vegas/tmux-vegas.conf.
+mkdir -p -m 700 /run/vegas-ui
+exec 9>/run/vegas-ui/session.lock
+flock 9
+# respawn a UI program; if it is not installed yet say so instead of spinning; a crash within 5 s waits 10 s (the
+# traceback stays readable and a crash loop does not keep the CPU busy restarting Python)
+loop() { echo "while :; do if command -v $1 >/dev/null; then s=\$(cut -d. -f1 /proc/uptime); $1; [ \$((\$(cut -d. -f1 /proc/uptime) - s)) -ge 5 ] || sleep 9; sleep 1; else echo '$1 is not installed'; sleep 60; fi; done"; }
+look() { tmux source-file -q /etc/vegas/tmux-vegas.conf 2>/dev/null; }
+# the server may be started from SSH first: give the session the screen's client env so swaymsg/wvkbd calls work in
+# any window (-e also covers a server that a bare `tmux` over SSH started with /run/user/0)
+export XDG_RUNTIME_DIR=/run/sway WAYLAND_DISPLAY=wayland-1   # the only display; an SSH login has /run/user/0
+[ -n "${SWAYSOCK:-}" ] || SWAYSOCK=$(ls /run/sway/sway-ipc.*.sock 2>/dev/null | head -1)
+export SWAYSOCK
+win() {  # index name command...: create main:<index> unless it exists
+  i=$1 n=$2; shift 2
+  tmux list-windows -t '=main' -F '#{window_index}' 2>/dev/null | grep -qx "$i" || tmux new-window -d -t "main:$i" -n "$n" "$@"
+}
+if ! tmux has-session -t '=main' 2>/dev/null; then
+  # 9>&-: the tmux server daemonizes here and must not inherit (and hold forever) the lock
+  LANG=C.UTF-8 COLORTERM=truecolor tmux new-session -d -s main -n home -x 60 -y 38 \
+    -e XDG_RUNTIME_DIR=/run/sway -e WAYLAND_DISPLAY=wayland-1 -e "SWAYSOCK=$SWAYSOCK" -e LANG=C.UTF-8 \
+    -e COLORTERM=truecolor "$(loop vegas-home)" 9>&-
+  fresh=1
+fi
+win 0 home "$(loop vegas-home)"
+win 1 net "$(loop vegas-net)"
+win 2 sh "while :; do bash -l; sleep 0.3; done"
+win 3 logs "while :; do journalctl -f -n 50 -o short --no-pager; sleep 5; done"
+[ -n "${fresh:-}" ] && tmux select-window -t main:2
+look
+exit 0

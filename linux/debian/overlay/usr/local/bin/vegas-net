@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+# vegas-net: launcher for the Vegas touch UI's Network page (tmux window 1, spec 4).
+# Runs as root inside tmux in foot (60 columns); also works over SSH. Code: /usr/lib/vegas/ui/vegasui/net.py
+# `vegas-net --restore <token>` is the join guard's timer (vegasui.wpa.JoinGuard): no terminal, puts the old network back.
+import sys
+sys.path.insert(0, "/usr/lib/vegas/ui")
+from vegasui.net import main
+main()

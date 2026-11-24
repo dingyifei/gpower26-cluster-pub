@@ -1,0 +1,619 @@
+#!/usr/bin/python3
+# vegas-keys: the screen's key daemon (root, python3-evdev). Owns the three hardware keys, the backlight, idle
+# dimming/off and the touch mute, so screen on/off and the 5 s reboot keep working when sway is hung.
+#   D4  screen off = backlight 0 + touch mute (panel and compositor keep running; never sway dpms/power/disable)
+#   D10 never stops, reloads, signals or kills sway; only our own children (glance foot, vegas-menu) are killed
+#   D17 Away: PIN pad drawn by the glance window, hit-tested here from raw (grabbed) touch coordinates
+#   Q6  wake shows the glance first, a volume key continues; Q9 volume keys = PageUp/PageDown in the terminal
+#   Q15 dim 45 s, off 60 s, glance 10 s, PIN pad 30 s; Away dim 2 min, off 3 min; Q18 5 s Power hold = reboot
+# Spec: docs/ui/ui-spec.md section 2. Keys/touch are found by device name, never by event number.
+# Threads: Inputs reads evdev and alone handles the 5 s hold (os.sync with a 2 s cap, then reboot(2)), so a logic
+# thread stuck in a swaymsg/tmux call (all have timeouts) can never stop the emergency reboot.
+# Helpers it starts (other files): /usr/lib/vegas/vegas-glance (glance + PIN pad window, killed on leave),
+# /usr/lib/vegas/vegas-menu <full|full-prog|short> <upright|landscape> (prints the chosen row; executed here as root).
+# Shared code: vegasui.pad (PIN pad geometry, same as the glance draws) and vegasui.pin (PIN check + lockout).
+# Test hooks: VEGAS_SYSROOT prefixes every file path (sysfs and /etc,/run,/var state), VEGAS_KEYS_DRYRUN=1 logs
+# reboots/poweroff instead of doing them, VEGAS_MENU / VEGAS_GLANCE / VEGAS_UI_LIB override the helper paths.
+import ctypes, glob, json, os, queue, select, signal, subprocess, sys, threading, time, traceback
+import evdev
+from evdev import ecodes as E
+sys.path.insert(0, os.environ.get("VEGAS_UI_LIB", "/usr/lib/vegas/ui"))
+try: from vegasui import pad as vpad, pin as vpin   # without them keys, backlight and idle still work; the PIN pad
+except ImportError: vpad = vpin = None              # then cannot unlock (Away stays keys-only, short menu)
+
+ROOT = os.environ.get("VEGAS_SYSROOT", "")
+DRYRUN = os.environ.get("VEGAS_KEYS_DRYRUN") == "1"
+def P(path): return ROOT + path
+
+BL = P("/sys/class/backlight/ktd3136-bl/brightness")   # the only backlight we ever write (never leds/lcd-backlight)
+UI = P("/run/vegas-ui")
+AWAY = P("/etc/vegas/away")          # Away on (D17); PIN hash and fail counter are vegasui.pin's
+MENU = os.environ.get("VEGAS_MENU", "/usr/lib/vegas/vegas-menu")
+GLANCE = os.environ.get("VEGAS_GLANCE", "/usr/lib/vegas/vegas-glance")
+
+HOLD, EMERGENCY = 0.8, 5.0
+T_DIM, T_OFF, T_AWAY_DIM, T_AWAY_OFF, T_GLANCE, T_PIN = 45, 60, 120, 180, 10, 30
+DIM_LEVEL = 205                                          # [BUILDER CHOICE] 10 % of 2047
+STEPS = [20, 40, 70, 110, 170, 250, 360, 520, 700, 889, 1200, 1600, 2047]   # [BUILDER CHOICE]
+NAMES = {"mtk-kpd": "kpd", "mtk-pmic-keys": "pmic", "ILITEK_TDDI": "touch"}
+KEYS = (E.KEY_POWER, E.KEY_VOLUMEUP, E.KEY_VOLUMEDOWN)
+UKEYS = [E.KEY_PAGEUP, E.KEY_PAGEDOWN, E.KEY_UP, E.KEY_DOWN, E.KEY_LEFT, E.KEY_RIGHT, E.KEY_ENTER, E.KEY_ESC,
+         E.KEY_TAB, E.KEY_LEFTSHIFT]
+PAD = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "del", "0", "ok"]   # = vegasui.pad.NAMES, the highlight order
+SWAY_MUTED = UI + "/touch-sway-muted"   # marker: the fallback mute (swaymsg) is in force and must be undone
+
+
+def log(*a): print("vegas-keys:", *a, file=sys.stderr, flush=True)
+
+def readf(path, default=""):
+    try:
+        with open(path) as f: return f.read().strip()
+    except OSError: return default
+
+def writef(path, text):
+    """Write via temp + rename so readers never see half a file."""
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f: f.write(text + "\n")
+        os.replace(tmp, path)
+    except OSError as e: log("write", path, e)
+
+def client_env():
+    env = dict(os.environ, XDG_RUNTIME_DIR="/run/sway", WAYLAND_DISPLAY="wayland-1", LANG="C.UTF-8",
+               COLORTERM="truecolor")
+    socks = sorted(glob.glob("/run/sway/sway-ipc.*.sock"))
+    if socks: env["SWAYSOCK"] = socks[0]
+    return env
+
+def run(cmd, timeout=1.0):
+    """Run a short client command; never hangs the daemon (sway may be hung). Returns stdout or None."""
+    try:
+        r = subprocess.run(cmd, env=client_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, timeout=timeout, text=True)
+        return r.stdout if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+def spawn(cmd, stdout=None):
+    """Start one of our own children in its own process group (so killing it can never reach sway)."""
+    return subprocess.Popen(cmd, env=client_env(), stdin=subprocess.DEVNULL, stdout=stdout,
+                            stderr=subprocess.DEVNULL, start_new_session=True, text=True)
+
+def kill_child(p):
+    if p is None or p.poll() is not None: return
+    try: os.killpg(p.pid, signal.SIGTERM)          # p.pid is its own pgid (start_new_session)
+    except OSError: pass
+    try: p.wait(1)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(p.pid, signal.SIGKILL)
+        except OSError: pass
+
+def sync_capped(limit=2.0):
+    """sync(2) in a thread, given up after `limit` s so a hung disk never blocks a key action."""
+    t = threading.Thread(target=os.sync, daemon=True); t.start(); t.join(limit)
+
+def emergency_reboot():
+    """5 s Power hold: sync (capped at 2 s, a hung disk must not block it) and reboot(2) directly, bypassing
+    systemd and sway. Lands in Android (no boot flag)."""
+    log("Power held 5 s: emergency reboot")
+    if DRYRUN: log("DRYRUN: would sync + reboot(RB_AUTOBOOT)"); return
+    sync_capped()
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.reboot(0x01234567)                       # RB_AUTOBOOT; only returns on failure
+    log("reboot(2) failed, errno", ctypes.get_errno()); os.system("systemctl reboot -ff")
+
+
+class Inputs(threading.Thread):
+    """Reads the key devices (grabbed for good) and the touch device (grabbed only while muted). Posts
+    ("key", code, value, t) and ("touch", down, x, y) to the queue; times the 5 s Power hold itself."""
+    def __init__(self, q):
+        super().__init__(daemon=True)
+        self.q, self.devs, self.lock = q, {}, threading.Lock()
+        self.want_grab = False
+        self.power_since = {}                       # role -> time Power went down
+        self.touch_max = (1080, 2388)
+        self.slots, self.slot, self.btn, self.x, self.y = set(), 0, False, 0, 0
+        self.down, self.last_emit, self.last_scan = False, 0.0, 0.0
+        self.fired = False
+        self.t0 = time.monotonic()
+
+    def rescan_every(self):
+        """1 s during the first 2 min (the touch module is loaded by vegas-sway's ExecStartPre, after this daemon starts,
+        and Away's mute must hold from the moment the device appears), then 5 s."""
+        return 1.0 if time.monotonic() - self.t0 < 120 else 5.0
+
+    def scan(self):
+        self.last_scan = time.monotonic()
+        mine = {d.path for d in self.devs.values()}
+        for path in evdev.list_devices():
+            if path in mine: continue
+            try: d = evdev.InputDevice(path)
+            except OSError: continue
+            role = NAMES.get(d.name)
+            if role is None or role in self.devs: d.close(); continue
+            try:
+                if role == "touch":
+                    ax, ay = d.absinfo(E.ABS_MT_POSITION_X), d.absinfo(E.ABS_MT_POSITION_Y)
+                    self.touch_max = (ax.max or 1080, ay.max or 2388)
+                    if self.want_grab: d.grab()
+                else:
+                    d.grab()                        # neither logind nor sway sees the raw keys
+            except OSError as e: log("open", d.name, e)
+            self.devs[role] = d
+            log("found", d.name, path, "touch max %dx%d" % self.touch_max if role == "touch" else "")
+
+    def drop(self, role):
+        d = self.devs.pop(role, None)
+        if d:
+            log("lost", d.name)
+            try: d.close()
+            except OSError: pass
+        self.power_since.pop(role, None)
+        if role == "touch":                         # a finger down when it went away must not stay down for good
+            self.slots, self.btn, self.down = set(), False, False
+
+    def set_touch_grab(self, on):
+        """EVIOCGRAB the touch device (on) or let it go. True when the touch device is now grabbed/released as asked
+        (an already-held grab counts); False when there is no touch device or the grab failed."""
+        with self.lock:
+            self.want_grab = on
+            d = self.devs.get("touch")
+            if d is None: return False
+            try: d.grab() if on else d.ungrab()
+            except OSError as e:
+                if e.errno not in (16, 22): log("touch grab", on, e); return False   # EBUSY/EINVAL: already so
+            return True
+
+    def run(self):
+        while True:
+            with self.lock:
+                if len(self.devs) < 3 and time.monotonic() - self.last_scan >= self.rescan_every(): self.scan()
+                fds = {d.fd: (r, d) for r, d in self.devs.items()}
+            # sleep until an event; wake early only for the 5 s Power deadline or the 5 s rescan (no idle polling)
+            now = time.monotonic()
+            due = [t + EMERGENCY - now for t in self.power_since.values()] if not self.fired else []
+            if len(fds) < 3: due.append(self.rescan_every())
+            timeout = max(0.0, min(due)) if due else None
+            try: ready, _, _ = select.select(list(fds), [], [], timeout)
+            except (OSError, ValueError): ready = []; time.sleep(0.1)   # never spin on a bad fd
+            for fd in ready:
+                role, d = fds[fd]
+                try: events = list(d.read())
+                except BlockingIOError: continue
+                except OSError:
+                    with self.lock: self.drop(role)
+                    continue
+                for ev in events: self.event(role, ev)
+            now = time.monotonic()
+            if any(now - t >= EMERGENCY for t in self.power_since.values()) and not self.fired:
+                self.fired = True
+                emergency_reboot()
+            if not self.power_since: self.fired = False
+
+    def event(self, role, ev):
+        if role != "touch":
+            if ev.type == E.EV_KEY and ev.code in KEYS:   # touch device's KEY_POWER (Q20) is never read here
+                if ev.code == E.KEY_POWER:
+                    if ev.value == 1: self.power_since[role] = time.monotonic()
+                    elif ev.value == 0: self.power_since.pop(role, None)
+                self.q.put(("key", ev.code, ev.value, time.monotonic()))
+            return
+        if ev.type == E.EV_ABS:
+            if ev.code == E.ABS_MT_SLOT: self.slot = ev.value
+            elif ev.code == E.ABS_MT_TRACKING_ID:
+                (self.slots.discard if ev.value < 0 else self.slots.add)(self.slot)
+            elif ev.code == E.ABS_MT_POSITION_X: self.x = ev.value
+            elif ev.code == E.ABS_MT_POSITION_Y: self.y = ev.value
+        elif ev.type == E.EV_KEY and ev.code == E.BTN_TOUCH: self.btn = bool(ev.value)
+        elif ev.type == E.EV_SYN and ev.code == E.SYN_REPORT:
+            down, now = bool(self.slots) or self.btn, time.monotonic()
+            if down != self.down or (down and now - self.last_emit > 0.5):   # edges + 2/s activity while moving
+                self.down, self.last_emit = down, now
+                mx, my = self.touch_max
+                self.q.put(("touch", down, self.x * 1080 / mx, self.y * 2388 / my))
+
+
+def pad_hit(px, py, rotation):
+    """Map a panel-pixel touch (upright 1080x2388) to a PIN pad key name or None, through vegasui.pad (the same
+    geometry the glance window draws). Raw touch axes assumed to follow the upright panel (Q20 open)."""
+    if vpad is None: return None
+    if rotation == "90":    x, y, w, h = py, 1080 - px, 2388, 1080    # camera left, keys up   [UNVERIFIED]
+    elif rotation == "270": x, y, w, h = 2388 - py, px, 2388, 1080    # camera right           [UNVERIFIED]
+    else:                   x, y, w, h = px, py, 1080, 2388
+    return vpad.hit(x, y, w, h)
+
+
+class Keys:
+    def __init__(self):
+        self.q = queue.Queue()
+        self.inputs = Inputs(self.q)
+        self.ui, self.ui_try = None, 0.0
+        self.state = None
+        self.level = self.read_level()
+        self.activity = time.monotonic()
+        self.entered = time.monotonic()
+        self.power_down = None              # monotonic time of the current Power press, None when up
+        self.hold_done = False
+        self.mute_at = None                 # pending touch mute (waits for finger lift, max 3 s)
+        self.touch_down = False
+        self.glance = self.menu = None
+        self.dark = False                   # in glance/pin with the backlight held at 0 (Away, window not mapped yet)
+        self.unmute_try = 0.0
+        self.menu_back = "on"
+        self.unlocked = False               # Away: right PIN entered since the last screen-off
+        self.pin, self.hl, self.msg = "", None, ""
+
+    # ---- helpers -------------------------------------------------------------------------------------------
+    def read_level(self):
+        for src in (P("/run/vegas-ui/brightness"), BL):
+            try:
+                v = int(readf(src, "x"))
+                if 0 < v <= 2047: return v
+            except ValueError: pass
+        return 889
+
+    def backlight(self, v):
+        try:
+            with open(BL, "w") as f: f.write(str(int(v)))
+        except OSError as e: log("backlight", e)
+
+    def away(self): return os.path.exists(AWAY)
+    def locked(self): return self.away() and not self.unlocked
+
+    def uinput_open(self):
+        if self.ui is None:
+            self.ui_try = time.monotonic()
+            try: self.ui = evdev.UInput({E.EV_KEY: UKEYS}, name="vegas-keys")
+            except Exception as e: log("uinput", e)
+        return self.ui
+
+    def tap(self, code, value=None):
+        ui = self.uinput_open()
+        if ui is None: return
+        for v in ((value,) if value is not None else (1, 0)):
+            ui.write(E.EV_KEY, code, v); ui.syn()
+
+    def set_state(self, s):
+        if s != self.state: log("state", self.state, "->", s)
+        self.state, self.entered = s, time.monotonic()
+        writef(UI + "/state", s)
+
+    def mute(self, on):
+        """Touch mute (D4, designer point 4): EVIOCGRAB in this daemon, so it holds with sway hung and lets the PIN
+        pad read taps. Only if the grab fails: the swaymsg mute verified on #5, undone at the next unmute."""
+        ok = self.inputs.set_touch_grab(on)
+        if on and not ok:
+            log("touch grab failed: muting through sway instead")
+            writef(SWAY_MUTED, "1")
+            run(["swaymsg", "-q", "input type:touch events disabled"])
+        elif not on and os.path.exists(SWAY_MUTED):
+            if run(["swaymsg", "-q", "input type:touch events enabled"]) is not None:
+                try: os.unlink(SWAY_MUTED)
+                except OSError: pass
+
+    def context(self):
+        """term | home | net | prog, read at key time; 'term' when sway or tmux do not answer."""
+        try:
+            ws = json.loads(run(["swaymsg", "-t", "get_workspaces"], 0.5) or "[]")
+            if any(w.get("focused") and w.get("num") == 2 for w in ws): return "prog"
+        except ValueError: pass
+        idx = (run(["tmux", "display-message", "-p", "-t", "main", "#{window_index}"], 0.5) or "").strip()
+        return {"0": "home", "1": "net"}.get(idx, "term")
+
+    def mapped(self, app_id):
+        def walk(n):
+            return n.get("app_id") == app_id or any(walk(c) for c in n.get("nodes", []) + n.get("floating_nodes", []))
+        try: return walk(json.loads(run(["swaymsg", "-t", "get_tree"], 0.5) or "{}"))
+        except ValueError: return False
+
+    def wait_touch_up(self, limit=3.0):
+        """Rotation must never start with a finger down."""
+        end, later = time.monotonic() + limit, []
+        while self.touch_down and time.monotonic() < end:
+            try: item = self.q.get(timeout=0.1)
+            except queue.Empty: continue
+            if item[0] == "touch": self.touch_down = item[1]
+            else: later.append(item)                     # keys etc. are handled after the wait, in order
+        for item in later: self.q.put(item)
+
+    # ---- screen states (D4) --------------------------------------------------------------------------------
+    def to_off(self):
+        self.backlight(0); self.dark = False
+        kill_child(self.glance); self.glance = None
+        kill_child(self.menu); self.menu = None
+        self.unlocked, self.pin, self.hl, self.msg = False, "", None, ""
+        self.mute_at = time.monotonic() + 3.0      # mute once the finger is up (else sway sees a stuck touch)
+        self.set_state("off")
+        self.maybe_mute()
+
+    def maybe_mute(self):
+        if self.mute_at and (not self.touch_down or time.monotonic() >= self.mute_at):
+            self.mute_at = None
+            self.mute(True)
+
+    def to_glance(self):
+        self.set_state("glance"); self.dark = False
+        if self.glance is None or self.glance.poll() is not None:
+            try: self.glance = spawn([GLANCE])
+            except OSError as e: log("glance", e); self.glance = None
+        end = time.monotonic() + 1.5
+        while time.monotonic() < end and not self.mapped("vegas-glance"): time.sleep(0.1)
+        if not self.mapped("vegas-glance") and self.locked():
+            log("glance not mapped; Away locked, screen stays dark")   # never light the shell while Away
+            self.dark = True                     # tick lights it once the window is mapped
+        else:                                    # not Away: a lit (maybe hung) screen beats a phone that looks dead
+            self.backlight(self.level)           # only now: no shell content is ever lit before the glance
+        self.entered = time.monotonic()          # the 10 s count from when it is visible
+
+    def to_on(self):
+        kill_child(self.glance); self.glance = None
+        self.mute_at = None
+        self.mute(False)
+        self.backlight(self.level); self.dark = False
+        self.activity = time.monotonic()
+        self.set_state("on")
+
+    def to_dim(self):
+        self.backlight(min(self.level, DIM_LEVEL))
+        self.set_state("dim")
+
+    def to_pin(self):
+        self.pin, self.hl, self.msg = "", None, ""
+        self.activity = time.monotonic()
+        self.set_state("pin")
+        self.write_pin()
+
+    def write_pin(self):
+        writef(UI + "/pin", "n=%d max=6 hl=%s msg=%s" % (len(self.pin), "-" if self.hl is None else self.hl, self.msg))
+
+    def to_menu(self):
+        variant = "short" if self.locked() else ("full-prog" if self.context() == "prog" else "full")
+        self.menu_back = "off" if self.locked() else "on"
+        kill_child(self.glance); self.glance = None
+        if not self.locked():
+            self.mute_at = None; self.mute(False)
+        else:
+            self.mute(True)                       # keys only: taps above the menu would reach the terminal
+        self.backlight(self.level); self.dark = False
+        rot = "landscape" if readf(UI + "/rotation", "normal") in ("90", "270") else "upright"
+        try:
+            self.menu = spawn([MENU, variant, rot], stdout=subprocess.PIPE)
+        except OSError as e:
+            log("menu", e); self.menu = None
+            return self.to_on() if not self.locked() else self.to_off()
+        m = self.menu
+        threading.Thread(target=lambda: self.q.put(("menu", m, m.communicate()[0], m.returncode)),
+                         daemon=True).start()
+        self.activity = time.monotonic()
+        self.set_state("menu")
+
+    # ---- actions (2.7), executed here as root ----------------------------------------------------------------
+    def action(self, row):
+        row = row.strip()
+        log("menu:", row or "(cancel)")
+        if row == "Screen off" or self.locked(): self.to_off()   # the short menu leaves the screen dark
+        else: self.to_on()
+        if row in ("Reboot to Android", "Power off now"):    # "Power off now" = the menu's confirmed row
+            sync_capped()
+            cmd = ["systemctl", "poweroff" if row.startswith("Power") else "reboot"]
+            if DRYRUN: log("DRYRUN:", *cmd)
+            else: subprocess.Popen(cmd, start_new_session=True)
+            return
+        if self.locked(): return                     # the short menu has nothing else
+        if row == "Reboot to rescue root":
+            if DRYRUN: log("DRYRUN: reboot-rescue")
+            else: subprocess.Popen(["/usr/local/sbin/reboot-rescue"], start_new_session=True)
+            return
+        if row == "Rotate":
+            cur = readf(UI + "/rotation", "normal")
+            to = readf(UI + "/rotation-last", "90") if cur == "normal" else "normal"
+            self.wait_touch_up()
+            run(["/usr/local/sbin/vegas-rotate", to], 5)
+        elif row == "Restart terminal":
+            pid = readf(UI + "/term.pid")
+            if pid.isdigit() and readf("/proc/%s/comm" % pid) == "foot":   # never a stale pid (could be anything)
+                try: os.kill(int(pid), signal.SIGTERM)
+                except OSError: pass
+        elif row == "Close program":
+            run(["swaymsg", "-q", "[workspace=2] kill"])
+            run(["swaymsg", "-q", "workspace number 1"])
+        elif row == "Home":
+            run(["swaymsg", "-q", "workspace number 1"])
+            run(["tmux", "select-window", "-t", "main:0"])
+
+    # ---- PIN pad (D17): lockout rules and the hash live in vegasui.pin ------------------------------------------
+    def pad_key(self, k):
+        if vpin is None:
+            self.msg = "PIN check missing"; return self.write_pin()
+        left = vpin.locked_for()
+        if left:
+            self.pin, self.msg = "", "wait %ds" % left; return self.write_pin()
+        if k == "del": self.pin, self.msg = self.pin[:-1], ""
+        elif k == "ok":
+            res, lock = vpin.check(self.pin)
+            if res == "ok":
+                self.unlocked = True; log("PIN ok"); return self.to_on()
+            self.pin, self.msg = "", {"locked": "wrong PIN, wait %ds" % lock, "unset": "no PIN set"}.get(res, "wrong PIN")
+        elif len(self.pin) < 6: self.pin, self.msg = self.pin + k, ""
+        self.write_pin()
+
+    # ---- events --------------------------------------------------------------------------------------------
+    def power_press(self):
+        s = self.state
+        if s == "off": self.to_glance()
+        elif s == "glance": self.to_off()
+        elif s == "dim": self.to_on()
+        elif s == "menu": self.tap(E.KEY_ENTER)
+        elif s == "pin":
+            if self.hl is None: self.to_off()
+            else: self.pad_key(PAD[self.hl])
+        elif s == "on":                                  # ask sway/tmux only if a key highlight exists (fast off)
+            hl = [c for c in ("home", "net") if "highlight=1" in readf(UI + "/" + c)]
+            if hl and self.context() in hl: self.tap(E.KEY_ENTER)
+            else: self.to_off()
+
+    def power_hold(self):
+        if self.state == "menu": self.tap(E.KEY_ESC)
+        else: self.to_menu()
+
+    def volume(self, code, value):
+        up, s = code == E.KEY_VOLUMEUP, self.state
+        if value == 2:                                   # autorepeat: PageUp/PageDown only, only in on
+            if s == "on" and self.context() in ("term", "prog"):
+                self.tap(E.KEY_PAGEUP if up else E.KEY_PAGEDOWN)
+            return
+        if s == "glance": self.to_pin() if self.locked() else self.to_on()
+        elif s == "dim": self.to_on()
+        elif s == "menu": self.tap(E.KEY_UP if up else E.KEY_DOWN)
+        elif s == "pin":
+            self.hl = (len(PAD) - 1 if up else 0) if self.hl is None else (self.hl + (-1 if up else 1)) % len(PAD)
+            self.write_pin()
+        elif s == "on":
+            if self.context() in ("home", "net"): self.tap(E.KEY_UP if up else E.KEY_DOWN)
+            else: self.tap(E.KEY_PAGEUP if up else E.KEY_PAGEDOWN)
+
+    def handle(self, item):
+        kind = item[0]
+        if kind == "touch":
+            _, down, x, y = item
+            was, self.touch_down = self.touch_down, down
+            if self.state in ("on", "dim", "menu"):
+                self.activity = time.monotonic()
+                if self.state == "dim": self.to_on()
+            elif self.state == "pin":
+                self.activity = time.monotonic()
+                if was and not down:                     # act on lift
+                    k = pad_hit(x, y, readf(UI + "/rotation", "normal"))
+                    if k: self.hl = None; self.pad_key(k)
+            self.maybe_mute()
+            return
+        if kind == "key":
+            _, code, value, t = item
+            self.activity = time.monotonic()
+            if code == E.KEY_POWER:
+                if value == 1: self.power_down, self.hold_done = t, False
+                elif value == 0 and self.power_down is not None:
+                    held, self.power_down = t - self.power_down, None
+                    if not self.hold_done:                   # released before tick saw it (main loop was busy):
+                        self.power_hold() if held >= HOLD else self.power_press()   # judge by the event times
+            elif value == 1 or (value == 2 and time.monotonic() - t < 0.25):
+                self.volume(code, value)
+        elif kind == "menu":
+            _, proc, out, rc = item
+            if proc is not self.menu: return             # an old menu we already killed
+            self.menu = None
+            if self.state != "menu": return
+            if rc == 0 and out and out.strip() and out.strip() != "Cancel": self.action(out.splitlines()[-1])
+            elif self.menu_back == "off": self.to_off()
+            else: self.to_on()
+        elif kind == "ctl":
+            self.ctl(item[1])
+
+    def ctl(self, line):
+        w = line.split()
+        if w[:1] == ["brightness"] and len(w) >= 2:
+            if w[1] == "up": self.level = next((s for s in STEPS if s > self.level), 2047)
+            elif w[1] == "down": self.level = next((s for s in reversed(STEPS) if s < self.level), STEPS[0])
+            elif w[1] == "set" and len(w) == 3 and w[2].isdigit(): self.level = max(1, min(2047, int(w[2])))
+            writef(UI + "/brightness", str(self.level))
+            if self.state in ("on", "menu") or (self.state in ("glance", "pin") and not self.dark):
+                self.backlight(self.level)
+            elif self.state == "dim": self.backlight(min(self.level, DIM_LEVEL))
+        elif line == "screen off": self.to_off()
+        elif line == "menu" and self.state != "menu": self.to_menu()
+        elif line == "away changed":                  # set from Home: the person holding the phone is unlocked
+            log("away", "on" if self.away() else "off")
+            self.unlocked = self.state in ("on", "dim", "menu")
+            if not self.away() and self.state == "pin": self.to_on()
+        elif line == "glance" and self.state == "off": self.to_glance()
+        else: log("ctl: unknown", line)
+
+    def tick(self):
+        """Timers; returns seconds until the next deadline."""
+        now, s = time.monotonic(), self.state
+        if self.power_down is not None and not self.hold_done and now - self.power_down >= HOLD \
+                and self.inputs.power_since:                 # still physically down (else the release is queued)
+            self.hold_done = True                        # hold fires at 0.8 s while still held
+            self.power_hold()
+            s = self.state                               # the hold may have opened the menu: no stale state below
+        if self.power_down is not None and not self.inputs.power_since and self.q.empty() \
+                and now - self.power_down > 2.0:
+            self.power_down = None                       # release lost (key device dropped while held)
+        self.maybe_mute()
+        if (s in ("on", "dim") or (s == "menu" and not self.locked())) and os.path.exists(SWAY_MUTED) and now - self.unmute_try > 3:
+            self.unmute_try = now; self.mute(False)      # the fallback unmute failed (sway hung): never stay muted lit
+        if s in ("glance", "pin"):
+            alive = self.glance is not None and self.glance.poll() is None
+            if self.dark and alive and self.mapped("vegas-glance"):
+                self.dark = False; self.backlight(self.level)   # glance window came up late (slow foot start)
+            elif not alive and self.locked() and not self.dark:
+                log("glance window gone; Away locked: screen off"); self.to_off(); return 0.05
+        if self.ui is None and now - self.ui_try > 5: self.uinput_open()   # keep the keyboard on the seat
+        a = self.away()
+        dim_t, off_t = (T_AWAY_DIM, T_AWAY_OFF) if a else (T_DIM, T_OFF)
+        if s == "on" and now - self.activity >= dim_t: self.to_dim()
+        elif s in ("dim", "menu") and now - self.activity >= off_t: self.to_off()   # idle off also cancels the menu
+        elif s == "glance" and now - self.entered >= T_GLANCE: self.to_off()
+        elif s == "pin" and now - self.activity >= T_PIN: self.to_off()
+        if self.power_down is not None or self.mute_at: return 0.05
+        return 5.0 if s == "off" else 0.5                # off has no timers: no 2 Hz wakeups while dark
+
+    def ctl_reader(self):
+        path = UI + "/ctl"
+        try: os.unlink(path)
+        except OSError: pass
+        os.mkfifo(path, 0o600)
+        fd = os.open(path, os.O_RDWR)                    # RDWR: never EOF when the last writer closes
+        buf = b""
+        while True:
+            buf += os.read(fd, 4096)
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if line.strip(): self.q.put(("ctl", line.decode(errors="replace").strip()))
+
+    def main(self):
+        os.makedirs(UI, mode=0o700, exist_ok=True)
+        os.chmod(UI, 0o700)
+        writef(UI + "/brightness", str(self.level))
+        self.uinput_open()                               # present always (bemenu crashed with no keyboard on the seat)
+        threading.Thread(target=self.ctl_reader, daemon=True).start()
+        with self.inputs.lock: self.inputs.scan()
+        self.inputs.start()
+        # Away: dark and muted before any screen appears. A restart (crash, 1 s) while the screen was dark stays dark.
+        if self.away() or readf(UI + "/state") in ("off", "glance", "pin"): self.to_off()
+        else: self.to_on()
+        wait = 0.5
+        while True:                                      # a bug in one handler is logged, not fatal: the keys,
+            try: self.handle(self.q.get(timeout=wait))   # the backlight and the 5 s reboot keep working
+            except queue.Empty: pass
+            except Exception: log("handler error:", traceback.format_exc())
+            try: wait = self.tick()
+            except Exception: log("timer error:", traceback.format_exc()); wait = 0.5
+
+
+DAEMON = None
+
+def _on_term(*_):
+    """systemctl stop / shutdown: undo the swaymsg fallback mute (an EVIOCGRAB ends with the process) and, unless
+    Away is on, light the screen: without this daemon no key can wake it."""
+    try:
+        k = DAEMON
+        if os.path.exists(SWAY_MUTED) and run(["swaymsg", "-q", "input type:touch events enabled"]) is not None:
+            os.unlink(SWAY_MUTED)
+        if k is not None and not os.path.exists(AWAY) and k.state in ("off", "glance", "pin", "dim"):
+            k.backlight(k.level)
+    except Exception: pass
+    os._exit(0)
+
+
+def _die(args):
+    log("thread crashed:", args.exc_type.__name__, args.exc_value)
+    os._exit(1)                                          # systemd restarts us in 1 s
+
+
+if __name__ == "__main__":
+    threading.excepthook = _die
+    signal.signal(signal.SIGTERM, _on_term)
+    DAEMON = Keys()
+    try: DAEMON.main()
+    except KeyboardInterrupt: pass

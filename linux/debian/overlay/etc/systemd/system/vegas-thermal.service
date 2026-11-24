@@ -1,0 +1,11 @@
+[Unit]
+Description=vegas SoC thermal cap (cpufreq limits from soc_max; Android's thermal HAL does this under Android)
+After=vegas-modules.service
+
+[Service]
+ExecStart=/usr/lib/vegas/thermal
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# MediaTek's fuel gauge runs in daemon mode on vegas: the SOC (battery/capacity) only becomes valid while the
+# vendor fuelgauged (libfgauge_gm30.so, netlink to the gauge driver) runs. Its state lives in /mnt/vendor/nvcfg/fg,
+# which here is a plain directory on Debian's root, seeded from a copy (never the nvcfg partition: see nvguard).
+# fuelgauged_nvram is never run (it writes nvcfg/nvdata).
+[Unit]
+Description=MediaTek fuel gauge daemon (vendor binary under the Android linker)
+After=local-fs.target vegas-modules.service
+ConditionPathExists=/vendor/bin/fuelgauged
+ConditionPathExists=/linkerconfig/ld.config.txt
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+ExecStartPre=/usr/lib/vegas/nvguard
+ExecStartPre=/bin/mkdir -p /mnt/vendor/nvcfg/fg
+ExecStart=/vendor/bin/fuelgauged
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

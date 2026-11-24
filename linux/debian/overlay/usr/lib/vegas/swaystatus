@@ -1,0 +1,23 @@
+#!/bin/sh
+# swaybar status_command (sway config names this path): the top strip is vegas-status --bar (UI spec 1.4: i3bar
+# JSON with taps; badges MAIN/RESCUE/AWAY/AP/kbd, links, SoC temperature, battery, minute clock).
+# Fallback when vegas-status or its python package is missing or broken: the old plain-text line every 20 s, so the
+# strip never goes blank (the node does not depend on any of this).
+# (timeout: a probe that hangs must not leave the strip blank either)
+# One-off camera-hole ruler: `vegas-status --ruler on|off` (a flag file the running feed reads; never a sway reload).
+if timeout 15 /usr/local/bin/vegas-status --bar-once 360 >/dev/null 2>&1; then
+  exec /usr/local/bin/vegas-status --bar
+fi
+# SoC zone as everywhere else (B3): the soc_max zone, thermal_zone0 only if there is none
+zone=/sys/class/thermal/thermal_zone0
+for z in /sys/class/thermal/thermal_zone*; do
+  [ "$(cat "$z/type" 2>/dev/null)" = soc_max ] && { zone=$z; break; }
+done
+while :; do
+  cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+  st=$(cat /sys/class/power_supply/battery/status 2>/dev/null)
+  t=$(( $(cat "$zone/temp" 2>/dev/null || echo 0) / 1000 ))
+  case $st in Charging) c="+" ;; "Not charging") c="=" ;; *) c="" ;; esac
+  printf "%s   %s°C   %s%%%s\n" "$(date +%H:%M)" "$t" "$cap" "$c"
+  sleep 20
+done

@@ -1,0 +1,18 @@
+# Systemless hosts block, bind-mounted over /system/etc/hosts by ota_block/service.sh.
+# Defense-in-depth OTA block: null-route Motorola OTA / checkin (CCC/Blur) hosts.
+# Does NOT touch Google endpoints (Play Integrity / app traffic stay reachable).
+# Authoritative farm-wide block is LAN DNS (AdGuard, see docs/ota.md). hosts has no
+# wildcard support, so this is a best-effort explicit list refined from live DNS recon.
+127.0.0.1       localhost
+::1             ip6-localhost
+
+# --- Motorola OTA / Blur / CCC (checkin + update delivery) ---
+0.0.0.0 ota.cdn.motorola.com
+0.0.0.0 ota-cdn.motorola.com
+0.0.0.0 ccc-tracking.svcmot.com
+0.0.0.0 ccc-telemetry.svcmot.com
+0.0.0.0 ccc-g.svcmot.com
+0.0.0.0 ccc.svcmot.com
+0.0.0.0 gudp-blur.svcmot.com
+0.0.0.0 blur-gcm.svcmot.com
+0.0.0.0 blur-services-signup.svcmot.com

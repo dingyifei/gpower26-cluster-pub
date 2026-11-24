@@ -1,0 +1,12 @@
+[Unit]
+Description=MediaTek WMT launcher (connsys firmware/patch loader; vendor binary)
+ConditionPathExists=/vendor/bin/wmt_launcher
+
+[Service]
+ExecStartPre=/usr/lib/vegas/nvguard
+# wmt_launcher polls the Android property vendor.connsys.driver.ready: the property shim (/odm/lib64, allowed by the
+# vendor linker namespace) answers it. wmt_loader runs WITHOUT the shim (with driver.ready=yes it would skip chip setup).
+Environment=LD_PRELOAD=libpropshim.so
+ExecStart=/vendor/bin/wmt_launcher -p /vendor/firmware/ -o 1
+Restart=on-failure
+RestartSec=5

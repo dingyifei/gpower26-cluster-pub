@@ -1,0 +1,4 @@
+#!/bin/sh
+[ -e "$VEGAS_SYSROOT/hang" ] && exec sleep 30
+echo "tmux $*" >> "$VEGAS_SYSROOT/cmds"
+case "$1" in display-message) cat "$VEGAS_SYSROOT/win" 2>/dev/null || echo 2 ;; esac

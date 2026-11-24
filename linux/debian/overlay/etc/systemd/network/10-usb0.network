@@ -1,0 +1,14 @@
+# USB NCM gadget (set up by the initramfs before switch_root): phone 172.16.42.1, the Mac gets .2 by DHCP
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+DHCPServer=yes
+ConfigureWithoutCarrier=yes
+
+[DHCPServer]
+PoolOffset=2
+PoolSize=1
+EmitDNS=no
+EmitRouter=no

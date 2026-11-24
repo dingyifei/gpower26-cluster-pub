@@ -1,0 +1,4 @@
+# Basic apps installed by `scripts/phone.sh apps`. Binaries live here locally (gitignored); fetch per README.
+*.apk
+!.gitignore
+!README.md

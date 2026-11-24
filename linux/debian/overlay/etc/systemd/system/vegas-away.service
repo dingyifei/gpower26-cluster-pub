@@ -1,0 +1,24 @@
+# Away (D17, Q31): when /etc/vegas/away exists, close SSH on Wi-Fi again at boot, before the network and sshd come up
+# (the rules live in the kernel only, so a reboot drops them). USB and VPN stay open. The screen side (PIN pad) is
+# vegas-keys', which reads /etc/vegas/away itself before the screen appears. IPv6: the ip6tables-legacy rule, or else
+# IPv6 off on Wi-Fi (disable_ipv6 on "default" before wlan0 exists, plus a /run networkd drop-in; see vegas-away).
+# ExecStart fails (unit failed, /run/vegas-ui/away-ssh = open) when Away is on but SSH could not be closed on Wi-Fi
+# for IPv4 or IPv6.
+[Unit]
+Description=vegas Away: SSH closed on Wi-Fi
+# firewall pattern (as netfilter-persistent): no default dependencies, so networkd is not held back to basic.target
+# on every boot; not ordered against vegas-sway (vegas-keys reads /etc/vegas/away itself)
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Wants=network-pre.target
+Before=network-pre.target ssh.service ssh.socket shutdown.target
+Conflicts=shutdown.target
+ConditionPathExists=/etc/vegas/away
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/vegas-away apply
+
+[Install]
+WantedBy=multi-user.target

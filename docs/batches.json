@@ -1,0 +1,2153 @@
+{
+ "note": "Generated. One batch is one GitHub issue and one pull request. Task ids are stable names used in the docs.",
+ "batches": [
+  {
+   "id": "B01",
+   "issue": 1,
+   "title": "Safety docs, contributing rules and templates",
+   "area": "onboarding",
+   "milestone": "M0",
+   "wave": 1,
+   "hardware": "none",
+   "risk": "low",
+   "depends_on": [],
+   "tasks": [
+    "onboarding-01",
+    "onboarding-02",
+    "onboarding-03",
+    "onboarding-07",
+    "onboarding-08"
+   ]
+  },
+  {
+   "id": "B02",
+   "issue": 2,
+   "title": "CI skeleton, Python tests, leak guard and binary guard",
+   "area": "onboarding",
+   "milestone": "M0",
+   "wave": 1,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "onboarding-09",
+    "onboarding-13",
+    "onboarding-14",
+    "onboarding-38"
+   ]
+  },
+  {
+   "id": "B03",
+   "issue": 3,
+   "title": "Seeds: device records, UI test import, phone test protocol, modem safety rules",
+   "area": "onboarding",
+   "milestone": "M0",
+   "wave": 1,
+   "hardware": "vm",
+   "risk": "low",
+   "depends_on": [],
+   "tasks": [
+    "onboarding-27",
+    "onboarding-28",
+    "ui-testing-01",
+    "ui-testing-16",
+    "modem-calls-01"
+   ]
+  },
+  {
+   "id": "B04",
+   "issue": 4,
+   "title": "Inputs matrix, shellcheck and safety lint, fake adb and fastboot, first tool tests",
+   "area": "onboarding",
+   "milestone": "M1",
+   "wave": 2,
+   "hardware": "none",
+   "risk": "low",
+   "depends_on": [
+    1,
+    2
+   ],
+   "tasks": [
+    "onboarding-04",
+    "onboarding-10",
+    "onboarding-15",
+    "onboarding-17",
+    "onboarding-19",
+    "onboarding-20"
+   ]
+  },
+  {
+   "id": "B05",
+   "issue": 5,
+   "title": "Tool tests, flash planner, host inventory, primer, glossary, redact tool",
+   "area": "onboarding",
+   "milestone": "M1",
+   "wave": 2,
+   "hardware": "none",
+   "risk": "medium",
+   "depends_on": [
+    1,
+    2
+   ],
+   "tasks": [
+    "onboarding-21",
+    "onboarding-22",
+    "onboarding-24",
+    "onboarding-29",
+    "onboarding-35",
+    "onboarding-36",
+    "onboarding-37"
+   ]
+  },
+  {
+   "id": "B06",
+   "issue": 6,
+   "title": "CI jobs, static lints, scan-header fix, PIN pad unit tests",
+   "area": "ui-testing",
+   "milestone": "M1",
+   "wave": 2,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [
+    3
+   ],
+   "tasks": [
+    "ui-testing-02",
+    "ui-testing-03",
+    "ui-testing-08",
+    "ui-testing-09",
+    "ui-testing-10",
+    "ui-testing-11",
+    "ui-testing-12"
+   ]
+  },
+  {
+   "id": "B07",
+   "issue": 7,
+   "title": "VM suites: keys test, sway smoke test, Away IPv6, keyboard build, swipe spike",
+   "area": "ui-testing",
+   "milestone": "M1",
+   "wave": 2,
+   "hardware": "vm",
+   "risk": "none",
+   "depends_on": [
+    3
+   ],
+   "tasks": [
+    "ui-testing-04",
+    "ui-testing-06",
+    "ui-testing-13",
+    "ui-testing-14",
+    "ui-testing-15"
+   ]
+  },
+  {
+   "id": "B08",
+   "issue": 8,
+   "title": "Audio hardware doc, Bluetooth headset spike, number and SMS spike",
+   "area": "voip",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "voip-01",
+    "voip-27",
+    "voip-28"
+   ]
+  },
+  {
+   "id": "B09",
+   "issue": 9,
+   "title": "Audio firmware, module loader, UCM import, PipeWire and SIP client spikes, UI hooks",
+   "area": "voip",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "vm",
+   "risk": "low",
+   "depends_on": [],
+   "tasks": [
+    "voip-02",
+    "voip-02b",
+    "voip-03",
+    "voip-04",
+    "voip-10",
+    "voip-15",
+    "voip-20",
+    "voip-22"
+   ]
+  },
+  {
+   "id": "B10",
+   "issue": 10,
+   "title": "GPU contract, baseline sampler, module closure, probe and Mesa sources, wlroots patch",
+   "area": "gpu",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "vm",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "gpu-30",
+    "gpu-01",
+    "gpu-02",
+    "gpu-03",
+    "gpu-06",
+    "gpu-12"
+   ]
+  },
+  {
+   "id": "B11",
+   "issue": 11,
+   "title": "Six spikes on alternative GPU routes",
+   "area": "gpu",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "gpu-21",
+    "gpu-22",
+    "gpu-23",
+    "gpu-24",
+    "gpu-25",
+    "gpu-26"
+   ]
+  },
+  {
+   "id": "B12",
+   "issue": 12,
+   "title": "Log redaction, NV and daemon needs, eccci ABI and ccci_rpcd spikes",
+   "area": "mobile-data",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "mobile-data-01",
+    "mobile-data-03",
+    "mobile-data-06",
+    "mobile-data-07"
+   ]
+  },
+  {
+   "id": "B13",
+   "issue": 13,
+   "title": "Keep ModemManager off CCCI, propshim property log, ccmni configurator",
+   "area": "mobile-data",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "vm",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "mobile-data-02",
+    "mobile-data-04",
+    "mobile-data-24"
+   ]
+  },
+  {
+   "id": "B14",
+   "issue": 14,
+   "title": "AT and MIPC channel map, NV sandbox diff, nvguard, APN config, status file contract",
+   "area": "mobile-data",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "none",
+   "risk": "low",
+   "depends_on": [],
+   "tasks": [
+    "mobile-data-08",
+    "mobile-data-14",
+    "mobile-data-15",
+    "mobile-data-25",
+    "mobile-data-26"
+   ]
+  },
+  {
+   "id": "B15",
+   "issue": 15,
+   "title": "Telephony inventory spikes, binder services in a VM, carrier matrix, SMS PDU codec",
+   "area": "modem-calls",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "vm",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "modem-calls-04",
+    "modem-calls-05",
+    "modem-calls-08",
+    "modem-calls-23",
+    "modem-calls-24",
+    "modem-calls-27",
+    "modem-calls-32"
+   ]
+  },
+  {
+   "id": "B16",
+   "issue": 16,
+   "title": "Threat model, chooser size guard, plaintext-root audit, TRIM spike",
+   "area": "root-encryption",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [],
+   "tasks": [
+    "root-encryption-03",
+    "root-encryption-05",
+    "root-encryption-12",
+    "root-encryption-18"
+   ]
+  },
+  {
+   "id": "B17",
+   "issue": 17,
+   "title": "Rescue cryptsetup, testable root selection, unlock prompt, unl0kr spike",
+   "area": "root-encryption",
+   "milestone": "M1",
+   "wave": 1,
+   "hardware": "vm",
+   "risk": "medium",
+   "depends_on": [],
+   "tasks": [
+    "root-encryption-06",
+    "root-encryption-24",
+    "root-encryption-26",
+    "root-encryption-21"
+   ]
+  },
+  {
+   "id": "B18",
+   "issue": 18,
+   "title": "Gate tests, shellcheck cleanups, state-E path doc, pre-commit",
+   "area": "onboarding",
+   "milestone": "M2",
+   "wave": 3,
+   "hardware": "none",
+   "risk": "medium",
+   "depends_on": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "tasks": [
+    "onboarding-18",
+    "onboarding-31",
+    "onboarding-05",
+    "onboarding-11",
+    "onboarding-12",
+    "onboarding-16"
+   ]
+  },
+  {
+   "id": "B19",
+   "issue": 19,
+   "title": "Build VMs without OrbStack, remaining shellcheck cleanups",
+   "area": "onboarding",
+   "milestone": "M2",
+   "wave": 3,
+   "hardware": "vm",
+   "risk": "medium",
+   "depends_on": [
+    1,
+    3,
+    4,
+    5
+   ],
+   "tasks": [
+    "onboarding-25",
+    "onboarding-26",
+    "onboarding-32",
+    "onboarding-33",
+    "onboarding-34"
+   ]
+  },
+  {
+   "id": "B20",
+   "issue": 20,
+   "title": "CI for the uinput and sway smoke tests",
+   "area": "ui-testing",
+   "milestone": "M2",
+   "wave": 3,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [
+    7
+   ],
+   "tasks": [
+    "ui-testing-05",
+    "ui-testing-07"
+   ]
+  },
+  {
+   "id": "B21",
+   "issue": 21,
+   "title": "Attended audio test tool",
+   "area": "voip",
+   "milestone": "M2",
+   "wave": 2,
+   "hardware": "vm",
+   "risk": "low",
+   "depends_on": [
+    9
+   ],
+   "tasks": [
+    "voip-06"
+   ]
+  },
+  {
+   "id": "B22",
+   "issue": 22,
+   "title": "Call devices, PipeWire in the image, echo cancel, SIP service, jack watcher, Away check",
+   "area": "voip",
+   "milestone": "M2",
+   "wave": 4,
+   "hardware": "vm",
+   "risk": "low",
+   "depends_on": [
+    9,
+    39
+   ],
+   "tasks": [
+    "voip-08b",
+    "voip-11",
+    "voip-13",
+    "voip-16",
+    "voip-16b",
+    "voip-24",
+    "voip-25"
+   ]
+  },
+  {
+   "id": "B23",
+   "issue": 23,
+   "title": "Phone app: SIP control client, dialpad, in-call controls, incoming calls, volume keys",
+   "area": "voip",
+   "milestone": "M2",
+   "wave": 5,
+   "hardware": "vm",
+   "risk": "none",
+   "depends_on": [
+    9,
+    22
+   ],
+   "tasks": [
+    "voip-17",
+    "voip-18",
+    "voip-19",
+    "voip-21",
+    "voip-23"
+   ]
+  },
+  {
+   "id": "B24",
+   "issue": 24,
+   "title": "Build and package the Mesa prefix, isolation spike, gpu-env wrapper",
+   "area": "gpu",
+   "milestone": "M2",
+   "wave": 2,
+   "hardware": "vm",
+   "risk": "none",
+   "depends_on": [
+    10
+   ],
+   "tasks": [
+    "gpu-07",
+    "gpu-08",
+    "gpu-09",
+    "gpu-28"
+   ]
+  },
+  {
+   "id": "B25",
+   "issue": 25,
+   "title": "GPU mode plumbing: module loader, renderer switch, trial guard, image, thermal ceiling",
+   "area": "gpu",
+   "milestone": "M2",
+   "wave": 4,
+   "hardware": "none",
+   "risk": "low",
+   "depends_on": [
+    10,
+    24,
+    41
+   ],
+   "tasks": [
+    "gpu-13",
+    "gpu-14",
+    "gpu-15",
+    "gpu-29",
+    "gpu-17"
+   ]
+  },
+  {
+   "id": "B26",
+   "issue": 26,
+   "title": "Fake modem, AT parsers, data bring-up state machine, UI rows",
+   "area": "mobile-data",
+   "milestone": "M2",
+   "wave": 2,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [
+    13,
+    14
+   ],
+   "tasks": [
+    "mobile-data-22",
+    "mobile-data-33",
+    "mobile-data-23",
+    "mobile-data-27",
+    "mobile-data-28",
+    "mobile-data-29"
+   ]
+  },
+  {
+   "id": "B27",
+   "issue": 27,
+   "title": "Modem sandbox: NV images, namespace launcher, propshim profile, CLI, units",
+   "area": "mobile-data",
+   "milestone": "M2",
+   "wave": 3,
+   "hardware": "vm",
+   "risk": "low",
+   "depends_on": [
+    12,
+    13,
+    14,
+    43
+   ],
+   "tasks": [
+    "mobile-data-05",
+    "mobile-data-13",
+    "mobile-data-16",
+    "mobile-data-17",
+    "mobile-data-18",
+    "mobile-data-20",
+    "mobile-data-32",
+    "mobile-data-19"
+   ]
+  },
+  {
+   "id": "B28",
+   "issue": 28,
+   "title": "Mobile data runbook and safety page",
+   "area": "mobile-data",
+   "milestone": "M2",
+   "wave": 5,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [
+    44
+   ],
+   "tasks": [
+    "mobile-data-31"
+   ]
+  },
+  {
+   "id": "B29",
+   "issue": 29,
+   "title": "AT policy lists, fake modem scenarios, vegas-at and vegas-sms, redaction, MIPC decoder",
+   "area": "modem-calls",
+   "milestone": "M2",
+   "wave": 3,
+   "hardware": "none",
+   "risk": "none",
+   "depends_on": [
+    3,
+    12,
+    14,
+    15,
+    26
+   ],
+   "tasks": [
+    "modem-calls-06",
+    "modem-calls-30",
+    "modem-calls-15",
+    "modem-calls-31",
+    "modem-calls-16",
+    "modem-calls-02",
+    "modem-calls-19"
+   ]
+  },
+  {
+   "id": "B30",
+   "issue": 30,
+   "title": "Route D3 in a VM (ofono, rild), VoLTE go or no-go, first IMS slice",
+   "area": "modem-calls",
+   "milestone": "M2",
+   "wave": 6,
+   "hardware": "vm",
+   "risk": "none",
+   "depends_on": [
+    13,
+    15,
+    26,
+    27,
+    29,
+    45
+   ],
+   "tasks": [
+    "modem-calls-07",
+    "modem-calls-25",
+    "modem-calls-26",
+    "modem-calls-28",
+    "modem-calls-29"
+   ]
+  },
+  {
+   "id": "B31",
+   "issue": 31,
+   "title": "LUKS VM harness and initramfs shell hook",
+   "area": "root-encryption",
+   "milestone": "M2",
+   "wave": 2,
+   "hardware": "vm",
+   "risk": "medium",
+   "depends_on": [
+    17
+   ],
+   "tasks": [
+    "root-encryption-07",
+    "root-encryption-25"
+   ]
+  },
+  {
+   "id": "B32",
+   "issue": 32,
+   "title": "Key design, init.linux unlock path, failure counter, dm-crypt root, script guards",
+   "area": "root-encryption",
+   "milestone": "M2",
+   "wave": 4,
+   "hardware": "vm",
+   "risk": "medium",
+   "depends_on": [
+    16,
+    17,
+    31,
+    46
+   ],
+   "tasks": [
+    "root-encryption-04",
+    "root-encryption-08",
+    "root-encryption-09",
+    "root-encryption-10",
+    "root-encryption-11",
+    "root-encryption-27",
+    "root-encryption-13"
+   ]
+  },
+  {
+   "id": "B33",
+   "issue": 33,
+   "title": "State-E path dry run on a second phone (two parts)",
+   "area": "onboarding",
+   "milestone": "M3",
+   "wave": 4,
+   "hardware": "any-vegas",
+   "risk": "high",
+   "depends_on": [
+    1,
+    18
+   ],
+   "tasks": [
+    "onboarding-06",
+    "onboarding-30"
+   ]
+  },
+  {
+   "id": "B34",
+   "issue": 34,
+   "title": "Phone sitting 1: deploy, strip, keys, screen off",
+   "area": "ui-testing",
+   "milestone": "M3",
+   "wave": 2,
+   "hardware": "vegas-state-E",
+   "risk": "low",
+   "depends_on": [
+    3
+   ],
+   "tasks": [
+    "ui-testing-17",
+    "ui-testing-18",
+    "ui-testing-19",
+    "ui-testing-20",
+    "ui-testing-21",
+    "ui-testing-22",
+    "ui-testing-23"
+   ]
+  },
+  {
+   "id": "B35",
+   "issue": 35,
+   "title": "Phone sitting 2: idle soak, power hold, glance, power menu",
+   "area": "ui-testing",
+   "milestone": "M3",
+   "wave": 3,
+   "hardware": "vegas-state-E",
+   "risk": "medium",
+   "depends_on": [
+    34
+   ],
+   "tasks": [
+    "ui-testing-24",
+    "ui-testing-25",
+    "ui-testing-26",
+    "ui-testing-27",
+    "ui-testing-28",
+    "ui-testing-29",
+    "ui-testing-30"
+   ]
+  },
+  {
+   "id": "B36",
+   "issue": 36,
+   "title": "Phone sitting 3: Home, text sizes, Network, join guard, captive portal",
+   "area": "ui-testing",
+   "milestone": "M3",
+   "wave": 4,
+   "hardware": "vegas-state-E",
+   "risk": "low",
+   "depends_on": [
+    34,
+    35
+   ],
+   "tasks": [
+    "ui-testing-31",
+    "ui-testing-32",
+    "ui-testing-33",
+    "ui-testing-34",
+    "ui-testing-35",
+    "ui-testing-36",
+    "ui-testing-37"
+   ]
+  },
+  {
+   "id": "B37",
+   "issue": 37,
+   "title": "Phone sitting 4: Firefox, USB sharing, hotspot, charge switch, Away",
+   "area": "ui-testing",
+   "milestone": "M3",
+   "wave": 5,
+   "hardware": "vegas-state-E",
+   "risk": "low",
+   "depends_on": [
+    34,
+    35,
+    36
+   ],
+   "tasks": [
+    "ui-testing-38",
+    "ui-testing-39",
+    "ui-testing-40",
+    "ui-testing-41",
+    "ui-testing-42",
+    "ui-testing-43",
+    "ui-testing-44"
+   ]
+  },
+  {
+   "id": "B38",
+   "issue": 38,
+   "title": "Phone sitting 5: Away IPv6, rotation, PIN pad, gestures, keyboard v2",
+   "area": "ui-testing",
+   "milestone": "M3",
+   "wave": 6,
+   "hardware": "vegas-state-E",
+   "risk": "low",
+   "depends_on": [
+    7,
+    34,
+    35,
+    36,
+    37
+   ],
+   "tasks": [
+    "ui-testing-45",
+    "ui-testing-46",
+    "ui-testing-47",
+    "ui-testing-48",
+    "ui-testing-49",
+    "ui-testing-50",
+    "ui-testing-51"
+   ]
+  },
+  {
+   "id": "B39",
+   "issue": 39,
+   "title": "Phone audio checks: modules, speaker and mic, earpiece, headset",
+   "area": "voip",
+   "milestone": "M3",
+   "wave": 3,
+   "hardware": "vegas-state-E",
+   "risk": "medium",
+   "depends_on": [
+    9,
+    21
+   ],
+   "tasks": [
+    "voip-05",
+    "voip-07",
+    "voip-08",
+    "voip-09"
+   ]
+  },
+  {
+   "id": "B40",
+   "issue": 40,
+   "title": "Phone: PipeWire, echo cancellation, end-to-end SIP call",
+   "area": "voip",
+   "milestone": "M3",
+   "wave": 6,
+   "hardware": "vegas-state-E",
+   "risk": "medium",
+   "depends_on": [
+    22,
+    23
+   ],
+   "tasks": [
+    "voip-12",
+    "voip-14",
+    "voip-26"
+   ]
+  },
+  {
+   "id": "B41",
+   "issue": 41,
+   "title": "Phone: pixman baseline, module load, kbase probes, render and scanout spikes",
+   "area": "gpu",
+   "milestone": "M3",
+   "wave": 3,
+   "hardware": "vegas-state-E",
+   "risk": "medium",
+   "depends_on": [
+    10,
+    24
+   ],
+   "tasks": [
+    "gpu-27",
+    "gpu-04",
+    "gpu-05",
+    "gpu-10",
+    "gpu-11",
+    "gpu-16"
+   ]
+  },
+  {
+   "id": "B42",
+   "issue": 42,
+   "title": "Phone: first sway-on-GPU boot, soak, GL clients",
+   "area": "gpu",
+   "milestone": "M3",
+   "wave": 5,
+   "hardware": "vegas-state-E",
+   "risk": "high",
+   "depends_on": [
+    10,
+    25,
+    41
+   ],
+   "tasks": [
+    "gpu-18",
+    "gpu-19",
+    "gpu-20"
+   ]
+  },
+  {
+   "id": "B43",
+   "issue": 43,
+   "title": "Phone, modem down: CCCI inventory and fresh NV backup",
+   "area": "mobile-data",
+   "milestone": "M3",
+   "wave": 2,
+   "hardware": "vegas-state-E",
+   "risk": "low",
+   "depends_on": [
+    12
+   ],
+   "tasks": [
+    "mobile-data-09",
+    "mobile-data-12"
+   ]
+  },
+  {
+   "id": "B44",
+   "issue": 44,
+   "title": "Phone with SIM: Android captures, first modem boot, first data session (gated)",
+   "area": "mobile-data",
+   "milestone": "M3",
+   "wave": 4,
+   "hardware": "vegas-with-sim",
+   "risk": "high",
+   "depends_on": [
+    12,
+    13,
+    14,
+    26,
+    27,
+    43
+   ],
+   "tasks": [
+    "mobile-data-10",
+    "mobile-data-11",
+    "mobile-data-21",
+    "mobile-data-30"
+   ]
+  },
+  {
+   "id": "B45",
+   "issue": 45,
+   "title": "Phone with SIM: Android baseline and captures, gated AT status and SMS",
+   "area": "modem-calls",
+   "milestone": "M3",
+   "wave": 5,
+   "hardware": "vegas-with-sim",
+   "risk": "high",
+   "depends_on": [
+    3,
+    15,
+    29,
+    44
+   ],
+   "tasks": [
+    "modem-calls-03",
+    "modem-calls-17",
+    "modem-calls-18",
+    "modem-calls-21",
+    "modem-calls-22"
+   ]
+  },
+  {
+   "id": "B46",
+   "issue": 46,
+   "title": "Phone spikes: crypto survey, LUKS rehearsal, DRM exit, touch in the initramfs",
+   "area": "root-encryption",
+   "milestone": "M3",
+   "wave": 3,
+   "hardware": "vegas-state-E",
+   "risk": "high",
+   "depends_on": [
+    31
+   ],
+   "tasks": [
+    "root-encryption-01",
+    "root-encryption-02",
+    "root-encryption-19",
+    "root-encryption-29",
+    "root-encryption-20"
+   ]
+  },
+  {
+   "id": "B47",
+   "issue": 47,
+   "title": "Phone: backup, restore, encrypt, first trial, recovery drills, PIN unlock",
+   "area": "root-encryption",
+   "milestone": "M3",
+   "wave": 5,
+   "hardware": "vegas-state-E",
+   "risk": "high",
+   "depends_on": [
+    17,
+    32,
+    46
+   ],
+   "tasks": [
+    "root-encryption-14",
+    "root-encryption-28",
+    "root-encryption-15",
+    "root-encryption-16",
+    "root-encryption-17",
+    "root-encryption-22",
+    "root-encryption-23"
+   ]
+  }
+ ],
+ "tasks": {
+  "onboarding-01": {
+   "batch": "B01",
+   "issue": 1,
+   "title": "docs: SAFETY.md, a one-page 'what bricks a vegas' digest for contributors"
+  },
+  "onboarding-02": {
+   "batch": "B01",
+   "issue": 1,
+   "title": "docs: CONTRIBUTING.md with the hard safety rules and PR rules"
+  },
+  "onboarding-03": {
+   "batch": "B01",
+   "issue": 1,
+   "title": "docs: end-state map (A, C, D, E) with the scripts that move between them and which moves are one-way"
+  },
+  "onboarding-07": {
+   "batch": "B01",
+   "issue": 1,
+   "title": "repo: issue templates (bug, hardware test report, research spike, task) and a labels file"
+  },
+  "onboarding-08": {
+   "batch": "B01",
+   "issue": 1,
+   "title": "repo: PR template with a safety checklist, and CODEOWNERS on flashing and compositor paths"
+  },
+  "onboarding-09": {
+   "batch": "B02",
+   "issue": 2,
+   "title": "ci: GitHub Actions skeleton with a bash -n job over every bash script, including extension-less overlay scripts"
+  },
+  "onboarding-13": {
+   "batch": "B02",
+   "issue": 2,
+   "title": "ci: Python test job (sidemdm submodule tests + repo pytest discovery + ruff)"
+  },
+  "onboarding-14": {
+   "batch": "B02",
+   "issue": 2,
+   "title": "ci: public leak guard for device, network and telecom identifiers"
+  },
+  "onboarding-38": {
+   "batch": "B02",
+   "issue": 2,
+   "title": "ci: binary and firmware guard (no images, archives, APKs, modules or large files in the repo)"
+  },
+  "onboarding-27": {
+   "batch": "B03",
+   "issue": 3,
+   "title": "build: remove hard-coded per-phone serial defaults from build scripts (require VEGAS_SERIAL / an argument)"
+  },
+  "onboarding-28": {
+   "batch": "B03",
+   "issue": 3,
+   "title": "docs: devices/ record template and a local-only convention for contributors' phone records"
+  },
+  "ui-testing-01": {
+   "batch": "B03",
+   "issue": 3,
+   "title": "Import the VM UI test suites into tests/ui with repo-relative paths and one runner"
+  },
+  "ui-testing-16": {
+   "batch": "B03",
+   "issue": 3,
+   "title": "Phone UI test protocol, safety sheet and result template"
+  },
+  "modem-calls-01": {
+   "batch": "B03",
+   "issue": 3,
+   "title": "Write docs/SAFETY-MODEM.md: NV and modem safety rules N1-N9 (shared with mobile-data)"
+  },
+  "onboarding-04": {
+   "batch": "B04",
+   "issue": 4,
+   "title": "docs: inputs matrix, what can be built without a phone and which inputs a contributor must obtain themselves"
+  },
+  "onboarding-10": {
+   "batch": "B04",
+   "issue": 4,
+   "title": "ci: shellcheck job with a checked-in baseline (new findings fail, old ones are listed)"
+  },
+  "onboarding-15": {
+   "batch": "B04",
+   "issue": 4,
+   "title": "ci: safety lint for boot-chain and gate rules (relock, slot switch, NV/metadata writes, pre-supplied tokens)"
+  },
+  "onboarding-17": {
+   "batch": "B04",
+   "issue": 4,
+   "title": "test harness: fake adb and fastboot on PATH that record calls and replay canned device state"
+  },
+  "onboarding-19": {
+   "batch": "B04",
+   "issue": 4,
+   "title": "tests: unit tests for linux/tools/bootctrl.py with synthetic misc images"
+  },
+  "onboarding-20": {
+   "batch": "B04",
+   "issue": 4,
+   "title": "tests: unit tests for linux/tools/lptool.py (LP metadata dump/check/cmp/map/overlap) on synthetic super heads"
+  },
+  "onboarding-21": {
+   "batch": "B05",
+   "issue": 5,
+   "title": "tests: unit tests for linux/tools/checkimg.py (the pre-flash image gate)"
+  },
+  "onboarding-22": {
+   "batch": "B05",
+   "issue": 5,
+   "title": "tests: extract the downgrade/upgrade flashfile planner and test its skip lists on a synthetic flashfile.xml"
+  },
+  "onboarding-24": {
+   "batch": "B05",
+   "issue": 5,
+   "title": "spike: inventory every OrbStack and macOS-host assumption in the build and route scripts"
+  },
+  "onboarding-29": {
+   "batch": "B05",
+   "issue": 5,
+   "title": "docs: contributor primer on the stage protocol, tokens, logs and how to resume (architecture tour)"
+  },
+  "onboarding-35": {
+   "batch": "B05",
+   "issue": 5,
+   "title": "docs: glossary of vegas terms (lk, LP/super, AVB, NV, slots, end states, chooser, D10)"
+  },
+  "onboarding-36": {
+   "batch": "B05",
+   "issue": 5,
+   "title": "tests: extract the `::stage` / `::confirm` / `::manual` line parser from bench.py and unit-test it"
+  },
+  "onboarding-37": {
+   "batch": "B05",
+   "issue": 5,
+   "title": "tools: redact.py, scrub serials, IMEIs, SIM/line numbers, MACs, IPs and SSIDs from a log before pasting it in an issue"
+  },
+  "ui-testing-02": {
+   "batch": "B06",
+   "issue": 6,
+   "title": "CI: run the vegas-status and strip layout tests on every PR"
+  },
+  "ui-testing-03": {
+   "batch": "B06",
+   "issue": 6,
+   "title": "CI: run the Textual pilot tests for Home and Network"
+  },
+  "ui-testing-08": {
+   "batch": "B06",
+   "issue": 6,
+   "title": "CI: static lint for the never-break rules (D10, modem, backlight writer)"
+  },
+  "ui-testing-09": {
+   "batch": "B06",
+   "issue": 6,
+   "title": "CI: shellcheck the overlay's shell tools"
+  },
+  "ui-testing-10": {
+   "batch": "B06",
+   "issue": 6,
+   "title": "CI: every program the overlay calls is in build.sh PKGS"
+  },
+  "ui-testing-11": {
+   "batch": "B06",
+   "issue": 6,
+   "title": "Fix: Network header stays 'scanning' forever after a failed scan"
+  },
+  "ui-testing-12": {
+   "batch": "B06",
+   "issue": 6,
+   "title": "Unit tests: PIN pad hit test at rotation 0, 90 and 270"
+  },
+  "ui-testing-04": {
+   "batch": "B07",
+   "issue": 7,
+   "title": "VM: make the vegas-keys uinput test deterministic"
+  },
+  "ui-testing-06": {
+   "batch": "B07",
+   "issue": 7,
+   "title": "VM: port the headless sway smoke test into the repo, with a phone guard"
+  },
+  "ui-testing-13": {
+   "batch": "B07",
+   "issue": 7,
+   "title": "VM: Away IPv6 fallback path (no ip6tables-legacy) blocks port 22"
+  },
+  "ui-testing-14": {
+   "batch": "B07",
+   "issue": 7,
+   "title": "VM: reproducible build of the wvkbd-vegas .deb"
+  },
+  "ui-testing-15": {
+   "batch": "B07",
+   "issue": 7,
+   "title": "Spike: sideways swipe along the strip to switch workspaces"
+  },
+  "voip-01": {
+   "batch": "B08",
+   "issue": 8,
+   "title": "Docs: write docs/audio-on-vegas.md (audio hardware map and ALSA routing for Debian)"
+  },
+  "voip-27": {
+   "batch": "B08",
+   "issue": 8,
+   "title": "Spike: Bluetooth headset (HFP) for calls under Debian"
+  },
+  "voip-28": {
+   "batch": "B08",
+   "issue": 8,
+   "title": "Spike: keep the phone number reachable and add SMS over a SIP provider"
+  },
+  "voip-02": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "Build: stage aw883xx_acf.bin into the Debian image's /usr/lib/firmware"
+  },
+  "voip-02b": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "Build: optional per-unit speaker calibration (aw_cali.bin) from the builder's own persist backup"
+  },
+  "voip-03": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "Add vegas-audio-up and vegas-audio.service: load the 16 audio modules with modem checks and a one-strike guard"
+  },
+  "voip-04": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "Import the sister port's UCM2 config for mt6835-mt6377 and parse-check it"
+  },
+  "voip-10": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "Spike: how PipeWire should run under the root, seatless sway session"
+  },
+  "voip-15": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "Spike: choose the SIP client (baresip vs linphone-cli vs others) and start docs/voip-on-vegas.md"
+  },
+  "voip-20": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "vegas-keys: add 'call ring' and 'call end' commands to the control FIFO"
+  },
+  "voip-22": {
+   "batch": "B09",
+   "issue": 9,
+   "title": "Status strip and Home: SIP badge (registered / in call)"
+  },
+  "gpu-30": {
+   "batch": "B10",
+   "issue": 10,
+   "title": "Write the GPU-mode interface contract (paths, flags, env vars, log)"
+  },
+  "gpu-01": {
+   "batch": "B10",
+   "issue": 10,
+   "title": "Baseline sampler script for sway CPU, temperature and battery current"
+  },
+  "gpu-02": {
+   "batch": "B10",
+   "issue": 10,
+   "title": "Tool: compute the ordered GPU module closure from modules.dep"
+  },
+  "gpu-03": {
+   "batch": "B10",
+   "issue": 10,
+   "title": "Vendor the 2025 GPU probe sources with an arm64 build script"
+  },
+  "gpu-06": {
+   "batch": "B10",
+   "issue": 10,
+   "title": "Vendor the 2025 Mesa kbase patches and a fetch-and-apply script"
+  },
+  "gpu-12": {
+   "batch": "B10",
+   "issue": 10,
+   "title": "wlroots 0.18.2: opt-in glFinish before commit, built into a prefix"
+  },
+  "gpu-21": {
+   "batch": "B11",
+   "issue": 11,
+   "title": "Spike: libhybris + vendor Mali blob (Moto Pad route) on an API 33 vendor"
+  },
+  "gpu-22": {
+   "batch": "B11",
+   "issue": 11,
+   "title": "Spike: ARM glibc libmali r48 with wlroots"
+  },
+  "gpu-23": {
+   "batch": "B11",
+   "issue": 11,
+   "title": "Spike: PanVK + Zink over kbase on glibc/Wayland"
+  },
+  "gpu-24": {
+   "batch": "B11",
+   "issue": 11,
+   "title": "Spike: backport the Panfrost kernel driver to the 5.15 GKI kernel"
+  },
+  "gpu-25": {
+   "batch": "B11",
+   "issue": 11,
+   "title": "Spike: newer kbase-capable Mesa forks and forward-port cost"
+  },
+  "gpu-26": {
+   "batch": "B11",
+   "issue": 11,
+   "title": "Spike: Halium 13 / Droidian hwcomposer as a GPU path"
+  },
+  "mobile-data-01": {
+   "batch": "B12",
+   "issue": 12,
+   "title": "Redaction helper for modem, Android and Linux logs"
+  },
+  "mobile-data-03": {
+   "batch": "B12",
+   "issue": 12,
+   "title": "Spike: which NV files and daemons does the vegas modem need at boot?"
+  },
+  "mobile-data-06": {
+   "batch": "B12",
+   "issue": 12,
+   "title": "Spike: vendor eccci boot/stop ABI and md_state on the vegas 5.15 kernel"
+  },
+  "mobile-data-07": {
+   "batch": "B12",
+   "issue": 12,
+   "title": "Spike: ccci_rpcd versus Plinius ccci-server.py; run the vendor one or port?"
+  },
+  "mobile-data-02": {
+   "batch": "B13",
+   "issue": 13,
+   "title": "Keep ModemManager and ofono off the CCCI ports (udev ignore + masked units)"
+  },
+  "mobile-data-04": {
+   "batch": "B13",
+   "issue": 13,
+   "title": "propshim: optional log of every property a process asks for"
+  },
+  "mobile-data-24": {
+   "batch": "B13",
+   "issue": 13,
+   "title": "ccmni interface, route and DNS configurator"
+  },
+  "mobile-data-08": {
+   "batch": "B14",
+   "issue": 14,
+   "title": "Spike: AT and MIPC channel map, and the radio-on MIPC frame"
+  },
+  "mobile-data-14": {
+   "batch": "B14",
+   "issue": 14,
+   "title": "NV sandbox diff tool (before/after a modem run)"
+  },
+  "mobile-data-15": {
+   "batch": "B14",
+   "issue": 14,
+   "title": "nvguard: accept loop-mounted sandbox copies, still refuse real NV partitions"
+  },
+  "mobile-data-25": {
+   "batch": "B14",
+   "issue": 14,
+   "title": "APN configuration file and defaults"
+  },
+  "mobile-data-26": {
+   "batch": "B14",
+   "issue": 14,
+   "title": "Modem status file contract for the UI (/run/vegas/modem.json)"
+  },
+  "modem-calls-04": {
+   "batch": "B15",
+   "issue": 15,
+   "title": "Spike: inventory the vegas vendor IMS/telephony pieces (props, AIDL HALs, binaries)"
+  },
+  "modem-calls-05": {
+   "batch": "B15",
+   "issue": 15,
+   "title": "Spike: AT and MIPC command inventory for SMS, voice and IMS"
+  },
+  "modem-calls-08": {
+   "batch": "B15",
+   "issue": 15,
+   "title": "Spike: how Plinius (mainline MediaTek) does calls and SMS without Android RIL"
+  },
+  "modem-calls-23": {
+   "batch": "B15",
+   "issue": 15,
+   "title": "Spike: modem voice audio path on MT6835 under ALSA (offline study)"
+  },
+  "modem-calls-24": {
+   "batch": "B15",
+   "issue": 15,
+   "title": "Route D3 step 1: servicemanager + vndservicemanager as systemd units in a VM"
+  },
+  "modem-calls-27": {
+   "batch": "B15",
+   "issue": 15,
+   "title": "Carrier matrix: which US carriers/MVNOs need IMS for SMS and voice"
+  },
+  "modem-calls-32": {
+   "batch": "B15",
+   "issue": 15,
+   "title": "smspdu.py: SMS PDU encode/decode (GSM-7, UCS-2, concatenated) with tests"
+  },
+  "root-encryption-03": {
+   "batch": "B16",
+   "issue": 16,
+   "title": "Docs: threat model for Linux root encryption (data at rest only)"
+  },
+  "root-encryption-05": {
+   "batch": "B16",
+   "issue": 16,
+   "title": "Build guard: fail the chooser build if it would exceed init_boot"
+  },
+  "root-encryption-12": {
+   "batch": "B16",
+   "issue": 16,
+   "title": "Audit: list plaintext-root assumptions in scripts and tools"
+  },
+  "root-encryption-18": {
+   "batch": "B16",
+   "issue": 16,
+   "title": "Spike: is discard/TRIM through vegas-disk (and dm-crypt) safe?"
+  },
+  "root-encryption-06": {
+   "batch": "B17",
+   "issue": 17,
+   "title": "Rescue root: ship cryptsetup-bin and a chroot cryptopen helper"
+  },
+  "root-encryption-24": {
+   "batch": "B17",
+   "issue": 17,
+   "title": "init.linux: make root selection testable off-phone (no behaviour change)"
+  },
+  "root-encryption-26": {
+   "batch": "B17",
+   "issue": 17,
+   "title": "Unlock prompt program: no-echo read, retry count, write to a FIFO"
+  },
+  "root-encryption-21": {
+   "batch": "B17",
+   "issue": 17,
+   "title": "Spike: unl0kr 2.0.3 footprint and DRM backend from a chroot"
+  },
+  "onboarding-18": {
+   "batch": "B18",
+   "issue": 18,
+   "title": "tests: lock in the confirm-token and pick_serial gate behaviour of scripts/lib.sh"
+  },
+  "onboarding-31": {
+   "batch": "B18",
+   "issue": 18,
+   "title": "cleanup: fix shellcheck findings in scripts/lib.sh, route_d.sh and route_e.sh (gates frozen, owner-reviewed)"
+  },
+  "onboarding-05": {
+   "batch": "B18",
+   "issue": 18,
+   "title": "docs: path to state E for a contributor's own phone (from state D, safest order)"
+  },
+  "onboarding-11": {
+   "batch": "B18",
+   "issue": 18,
+   "title": "cleanup: fix shellcheck findings in linux/tools and the VM build scripts (no behaviour change)"
+  },
+  "onboarding-12": {
+   "batch": "B18",
+   "issue": 18,
+   "title": "cleanup: fix shellcheck findings in scripts/phone.sh, archive_backup.sh and reroot.sh (no behaviour change)"
+  },
+  "onboarding-16": {
+   "batch": "B18",
+   "issue": 18,
+   "title": "dev: pre-commit config mirroring CI (bash -n, shellcheck baseline, leak guard, safety lint, ruff)"
+  },
+  "onboarding-25": {
+   "batch": "B19",
+   "issue": 19,
+   "title": "build host: set up the x86_64 kernel-build VM without OrbStack (native Linux, Lima/UTM on Apple Silicon, WSL2)"
+  },
+  "onboarding-26": {
+   "batch": "B19",
+   "issue": 19,
+   "title": "build host: set up the arm64 Debian-image VM without OrbStack (Lima/UTM, native arm64 Linux, or a privileged container)"
+  },
+  "onboarding-32": {
+   "batch": "B19",
+   "issue": 19,
+   "title": "cleanup: fix shellcheck findings in scripts/linux_b.sh (stage lists and tokens frozen, owner-reviewed)"
+  },
+  "onboarding-33": {
+   "batch": "B19",
+   "issue": 19,
+   "title": "cleanup: fix shellcheck findings in scripts/downgrade.sh and upgrade.sh (after the planner refactor)"
+  },
+  "onboarding-34": {
+   "batch": "B19",
+   "issue": 19,
+   "title": "cleanup: fix shellcheck findings in the Debian overlay services and tools (chargeguard, thermal, nvguard, wifi-up, sbin/*)"
+  },
+  "ui-testing-05": {
+   "batch": "B20",
+   "issue": 20,
+   "title": "CI: run the vegas-keys uinput test where /dev/uinput exists"
+  },
+  "ui-testing-07": {
+   "batch": "B20",
+   "issue": 20,
+   "title": "CI: run the headless sway smoke test and attach the screenshots"
+  },
+  "voip-06": {
+   "batch": "B21",
+   "issue": 21,
+   "title": "Port the attended audio test tool as vegas-audio-test with hard volume caps"
+  },
+  "voip-08b": {
+   "batch": "B22",
+   "issue": 22,
+   "title": "UCM: add Earpiece-Voice and Speaker-Voice call devices for mt6835-mt6377"
+  },
+  "voip-11": {
+   "batch": "B22",
+   "issue": 22,
+   "title": "Package PipeWire, WirePlumber and pipewire-alsa in the image with a safe default volume"
+  },
+  "voip-13": {
+   "batch": "B22",
+   "issue": 22,
+   "title": "Echo cancellation and mic gain: PipeWire echo-cancel source and sink config"
+  },
+  "voip-16": {
+   "batch": "B22",
+   "issue": 22,
+   "title": "SIP client system service with a config template and secrets kept outside the image"
+  },
+  "voip-16b": {
+   "batch": "B22",
+   "issue": 22,
+   "title": "Wire the SIP client's audio to PipeWire's echo-cancel nodes"
+  },
+  "voip-24": {
+   "batch": "B22",
+   "issue": 22,
+   "title": "Headset jack watcher: switch PipeWire routing on plug and unplug"
+  },
+  "voip-25": {
+   "batch": "B22",
+   "issue": 22,
+   "title": "Check SIP and RTP with the Away switch, and keep the control socket local"
+  },
+  "voip-17": {
+   "batch": "B23",
+   "issue": 23,
+   "title": "Python client for the SIP control API (vegasui/sip.py) with tests"
+  },
+  "voip-18": {
+   "batch": "B23",
+   "issue": 23,
+   "title": "Textual Phone app: dialpad, outgoing call, hang up, registration line"
+  },
+  "voip-19": {
+   "batch": "B23",
+   "issue": 23,
+   "title": "In-call controls: mute and speaker/earpiece switch"
+  },
+  "voip-21": {
+   "batch": "B23",
+   "issue": 23,
+   "title": "Incoming calls: ring tone, answer, decline and busy in the Phone app"
+  },
+  "voip-23": {
+   "batch": "B23",
+   "issue": 23,
+   "title": "Volume keys change call volume during a call"
+  },
+  "gpu-07": {
+   "batch": "B24",
+   "issue": 24,
+   "title": "Build panfork Mesa in a Debian trixie arm64 VM into /opt/vegas-gpu/mesa-kbase"
+  },
+  "gpu-08": {
+   "batch": "B24",
+   "issue": 24,
+   "title": "Spike: prefix isolation (glvnd, libgbm, DRI loader)"
+  },
+  "gpu-09": {
+   "batch": "B24",
+   "issue": 24,
+   "title": "Package the GPU prefix: DRI aliases, tarball and SHA256SUMS"
+  },
+  "gpu-28": {
+   "batch": "B24",
+   "issue": 24,
+   "title": "gpu-env wrapper: verify the prefix and run a program against it"
+  },
+  "gpu-13": {
+   "batch": "B25",
+   "issue": 25,
+   "title": "Boot-time, flag-gated GPU module loader service"
+  },
+  "gpu-14": {
+   "batch": "B25",
+   "issue": 25,
+   "title": "Renderer selection for vegas-sway.service (default pixman)"
+  },
+  "gpu-15": {
+   "batch": "B25",
+   "issue": 25,
+   "title": "One-boot GPU trial guard, confirm timer and vegas-gpu CLI"
+  },
+  "gpu-29": {
+   "batch": "B25",
+   "issue": 25,
+   "title": "Ship GPU mode in the Debian image and deb-update (disabled by default)"
+  },
+  "gpu-17": {
+   "batch": "B25",
+   "issue": 25,
+   "title": "GPU frequency ceiling in vegas-thermal"
+  },
+  "mobile-data-22": {
+   "batch": "B26",
+   "issue": 26,
+   "title": "Fake CCCI modem (pty simulator) for offline tests"
+  },
+  "mobile-data-33": {
+   "batch": "B26",
+   "issue": 26,
+   "title": "AT response parsers for the data path (+CGCONTRDP, +EIF, +CEREG, +COPS, +CESQ)"
+  },
+  "mobile-data-23": {
+   "batch": "B26",
+   "issue": 26,
+   "title": "vegas-mobile-data: AT/MIPC data bring-up state machine"
+  },
+  "mobile-data-27": {
+   "batch": "B26",
+   "issue": 26,
+   "title": "Signal and operator readout in the data service"
+  },
+  "mobile-data-28": {
+   "batch": "B26",
+   "issue": 26,
+   "title": "UI: Network screen mobile data row driven by modem.json"
+  },
+  "mobile-data-29": {
+   "batch": "B26",
+   "issue": 26,
+   "title": "UI: status strip mobile badge driven by modem.json"
+  },
+  "mobile-data-05": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "Spike: property inventory for ccci_mdinit and ccci_rpcd"
+  },
+  "mobile-data-13": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "Build disposable per-phone NV sandbox images from a backup"
+  },
+  "mobile-data-16": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "Modem mount-namespace launcher with a whitelist-only /dev and sandbox NV mounts"
+  },
+  "mobile-data-17": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "propshim: modem property profile"
+  },
+  "mobile-data-18": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "vegas-modem CLI: status, allow/disallow go-ahead, and stop"
+  },
+  "mobile-data-20": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "Make vegas-wifi coexist with a deliberately booted modem"
+  },
+  "mobile-data-32": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "Read-only md1img node for ccci_rpcd inside modem-ns"
+  },
+  "mobile-data-19": {
+   "batch": "B27",
+   "issue": 27,
+   "title": "Disabled-by-default systemd units for ccci_mdinit and ccci_rpcd"
+  },
+  "mobile-data-31": {
+   "batch": "B28",
+   "issue": 28,
+   "title": "Mobile data runbook and safety page"
+  },
+  "modem-calls-06": {
+   "batch": "B29",
+   "issue": 29,
+   "title": "Spike: size the FuriLabs IMS plugin port from HIDL mtkradioex@3.0 to vegas AIDL mtkradioex V1"
+  },
+  "modem-calls-30": {
+   "batch": "B29",
+   "issue": 29,
+   "title": "tools/at-allowlist.txt and at-denylist.txt: the reviewed AT command policy (rule N5)"
+  },
+  "modem-calls-15": {
+   "batch": "B29",
+   "issue": 29,
+   "title": "fakemodem: SMS and call scenarios plus allowlist enforcement"
+  },
+  "modem-calls-31": {
+   "batch": "B29",
+   "issue": 29,
+   "title": "vegas-at: allowlist-enforcing one-shot AT client with redacted transcripts"
+  },
+  "modem-calls-16": {
+   "batch": "B29",
+   "issue": 29,
+   "title": "vegas-sms: SMS send/list/watch CLI over vegas-at (developed against the fake modem)"
+  },
+  "modem-calls-02": {
+   "batch": "B29",
+   "issue": 29,
+   "title": "redact.py: add SMS PDU addresses, call-log numbers and SIM/IMEI getprop keys"
+  },
+  "modem-calls-19": {
+   "batch": "B29",
+   "issue": 29,
+   "title": "MIPC frame decoder for captured traces (offline, with fixtures)"
+  },
+  "modem-calls-07": {
+   "batch": "B30",
+   "issue": 30,
+   "title": "Build ofono + ofono-binder-plugin (AIDL backend) for trixie arm64 and check radio HAL version coverage"
+  },
+  "modem-calls-25": {
+   "batch": "B30",
+   "issue": 30,
+   "title": "Route D3 step 2: start mtkfusionrild in a VM under propshim and record what it waits for"
+  },
+  "modem-calls-26": {
+   "batch": "B30",
+   "issue": 30,
+   "title": "Route D3 step 3: ofono-binder-plugin sees the VM rild and lists a modem"
+  },
+  "modem-calls-28": {
+   "batch": "B30",
+   "issue": 30,
+   "title": "VoLTE go/no-go report: route D3 IMS port vs Plinius-style AT/MIPC vs stop"
+  },
+  "modem-calls-29": {
+   "batch": "B30",
+   "issue": 30,
+   "title": "IMS plugin AIDL port, slice 1: IMS enable + registration state (only after a 'go')"
+  },
+  "root-encryption-07": {
+   "batch": "B31",
+   "issue": 31,
+   "title": "VM harness: LUKS2 over a dm-linear stand-in for vegas-disk"
+  },
+  "root-encryption-25": {
+   "batch": "B31",
+   "issue": 31,
+   "title": "init.linux: one-shot /initshell hook that stops in the initramfs shell"
+  },
+  "root-encryption-04": {
+   "batch": "B32",
+   "issue": 32,
+   "title": "Design: keyslots, key handling, header backup and recovery path"
+  },
+  "root-encryption-08": {
+   "batch": "B32",
+   "issue": 32,
+   "title": "init.linux: detect LUKS on vegas-disk and unlock through the rescue root"
+  },
+  "root-encryption-09": {
+   "batch": "B32",
+   "issue": 32,
+   "title": "init.linux: wire the unlock prompt to usb0 and ttyGS0 with timeout and teardown"
+  },
+  "root-encryption-10": {
+   "batch": "B32",
+   "issue": 32,
+   "title": "init.linux: boot-failure counter, /rescue and Vol-up with a locked root"
+  },
+  "root-encryption-11": {
+   "batch": "B32",
+   "issue": 32,
+   "title": "Debian main root: vegas-diskgrow and root handling on dm-crypt"
+  },
+  "root-encryption-27": {
+   "batch": "B32",
+   "issue": 32,
+   "title": "Root-device helper and LUKS refusal in linux_b.sh destructive stages"
+  },
+  "root-encryption-13": {
+   "batch": "B32",
+   "issue": 32,
+   "title": "linux_b.sh: unlock step for scripted reboots without logging the secret"
+  },
+  "onboarding-06": {
+   "batch": "B33",
+   "issue": 33,
+   "title": "hardware dry run, part 1: docs/state-e-path.md from state D through the linux-shell probe and restore, on a second expendable phone"
+  },
+  "onboarding-30": {
+   "batch": "B33",
+   "issue": 33,
+   "title": "hardware dry run, part 2: docs/state-e-path.md from p2-capture to state-e on the same expendable phone"
+  },
+  "ui-testing-17": {
+   "batch": "B34",
+   "issue": 34,
+   "title": "Phone: deploy the UI and check the session (tmux main, terminal loop, Mac attach)"
+  },
+  "ui-testing-18": {
+   "batch": "B34",
+   "issue": 34,
+   "title": "Phone: strip and text report values match sysfs"
+  },
+  "ui-testing-19": {
+   "batch": "B34",
+   "issue": 34,
+   "title": "Phone: measure the camera hole with the strip ruler and set the strip/glance gaps"
+  },
+  "ui-testing-20": {
+   "batch": "B34",
+   "issue": 34,
+   "title": "Phone: strip taps (Home, Network, keyboard) and the way back from workspace 2"
+  },
+  "ui-testing-21": {
+   "batch": "B34",
+   "issue": 34,
+   "title": "Phone: strip badges (rescue pending, AP, AWAY) appear and fit"
+  },
+  "ui-testing-22": {
+   "batch": "B34",
+   "issue": 34,
+   "title": "Phone: vegas-keys basics (devices by name, volume paging, brightness, dim/off timers)"
+  },
+  "ui-testing-23": {
+   "batch": "B34",
+   "issue": 34,
+   "title": "Phone: Power-key screen off/on, touch muted by EVIOCGRAB, glance before backlight"
+  },
+  "ui-testing-24": {
+   "batch": "B35",
+   "issue": 35,
+   "title": "Phone: 10-minute idle soak, strip and Home/Network cost while the screen is dark"
+  },
+  "ui-testing-25": {
+   "batch": "B35",
+   "issue": 35,
+   "title": "Phone: 5 s Power hold makes vegas-keys sync and reboot"
+  },
+  "ui-testing-26": {
+   "batch": "B35",
+   "issue": 35,
+   "title": "Phone: measure the hardware long-press reset time (Q18)"
+  },
+  "ui-testing-27": {
+   "batch": "B35",
+   "issue": 35,
+   "title": "Phone: glance screen layout, values and timeout"
+  },
+  "ui-testing-28": {
+   "batch": "B35",
+   "issue": 35,
+   "title": "Phone: power menu by keys and by touch"
+  },
+  "ui-testing-29": {
+   "batch": "B35",
+   "issue": 35,
+   "title": "Phone: Reboot to Android from the power menu, keys only"
+  },
+  "ui-testing-30": {
+   "batch": "B35",
+   "issue": 35,
+   "title": "Phone: Power off from the menu with sway running (Q4)"
+  },
+  "ui-testing-31": {
+   "batch": "B36",
+   "issue": 36,
+   "title": "Phone: Home screen by touch"
+  },
+  "ui-testing-32": {
+   "batch": "B36",
+   "issue": 36,
+   "title": "Phone: Home by keys only"
+  },
+  "ui-testing-33": {
+   "batch": "B36",
+   "issue": 36,
+   "title": "Phone: measure the text-size presets"
+  },
+  "ui-testing-34": {
+   "batch": "B36",
+   "issue": 36,
+   "title": "Phone: Network list and WPA2 join on the glass"
+  },
+  "ui-testing-35": {
+   "batch": "B36",
+   "issue": 36,
+   "title": "Phone: saved network survives Android round trip; Forget works"
+  },
+  "ui-testing-36": {
+   "batch": "B36",
+   "issue": 36,
+   "title": "Phone: Wi-Fi join guard over SSH returns to the old network"
+  },
+  "ui-testing-37": {
+   "batch": "B36",
+   "issue": 36,
+   "title": "Phone: captive-portal sign-in check, w3m path and hostile URL"
+  },
+  "ui-testing-38": {
+   "batch": "B37",
+   "issue": 37,
+   "title": "Phone: Firefox fits the screen and opens on workspace 2"
+  },
+  "ui-testing-39": {
+   "batch": "B37",
+   "issue": 37,
+   "title": "Phone: captive portal 'Open in Firefox' button"
+  },
+  "ui-testing-40": {
+   "batch": "B37",
+   "issue": 37,
+   "title": "Phone: USB sharing from the Network screen"
+  },
+  "ui-testing-41": {
+   "batch": "B37",
+   "issue": 37,
+   "title": "Phone: Wi-Fi hotspot from the Network screen (QR, device count, new passphrase)"
+  },
+  "ui-testing-42": {
+   "batch": "B37",
+   "issue": 37,
+   "title": "Phone: charge-to-full switch end to end"
+  },
+  "ui-testing-43": {
+   "batch": "B37",
+   "issue": 37,
+   "title": "Phone: Away mode PIN pad on wake (upright)"
+  },
+  "ui-testing-44": {
+   "batch": "B37",
+   "issue": 37,
+   "title": "Phone: Away blocks SSH over Wi-Fi on IPv4 and survives reboot"
+  },
+  "ui-testing-45": {
+   "batch": "B38",
+   "issue": 38,
+   "title": "Phone: Away blocks SSH over Wi-Fi on IPv6 (rule path)"
+  },
+  "ui-testing-46": {
+   "batch": "B38",
+   "issue": 38,
+   "title": "Phone: rotation from Home, the power menu and SSH"
+  },
+  "ui-testing-47": {
+   "batch": "B38",
+   "issue": 38,
+   "title": "Phone: PIN pad hit test in landscape and the raw touch range (Q20)"
+  },
+  "ui-testing-48": {
+   "batch": "B38",
+   "issue": 38,
+   "title": "Phone: edge gestures (lisgd) upright and rotated"
+  },
+  "ui-testing-49": {
+   "batch": "B38",
+   "issue": 38,
+   "title": "Phone: keyboard v2 install and typing, incl. the modifier-release patch"
+  },
+  "ui-testing-50": {
+   "batch": "B38",
+   "issue": 38,
+   "title": "Phone: keyboard v2 Hide key, also with a latched modifier"
+  },
+  "ui-testing-51": {
+   "batch": "B38",
+   "issue": 38,
+   "title": "Phone: keyboard v2 fit (labels, rounded corners, landscape layer)"
+  },
+  "voip-05": {
+   "batch": "B39",
+   "issue": 39,
+   "title": "Phone check (no sound): load the audio modules and record the card, controls and dmesg"
+  },
+  "voip-07": {
+   "batch": "B39",
+   "issue": 39,
+   "title": "Phone test (attended, quiet): speaker and main mic"
+  },
+  "voip-08": {
+   "batch": "B39",
+   "issue": 39,
+   "title": "Phone test (attended): earpiece on aw_dev_0 with the Receiver and Voice profiles"
+  },
+  "voip-09": {
+   "batch": "B39",
+   "issue": 39,
+   "title": "Phone test: 3.5 mm headphones, headset mic and the jack input device"
+  },
+  "voip-12": {
+   "batch": "B40",
+   "issue": 40,
+   "title": "Phone check: PipeWire sees the card and plays and records at low volume"
+  },
+  "voip-14": {
+   "batch": "B40",
+   "issue": 40,
+   "title": "Phone test: full-duplex speaker + mic and earpiece + mic through echo cancellation"
+  },
+  "voip-26": {
+   "batch": "B40",
+   "issue": 40,
+   "title": "Phone test: end-to-end SIP call over Wi-Fi from the touch UI"
+  },
+  "gpu-27": {
+   "batch": "B41",
+   "issue": 41,
+   "title": "Run the pixman baseline on an E phone and write docs/gpu/baseline.md"
+  },
+  "gpu-04": {
+   "batch": "B41",
+   "issue": 41,
+   "title": "Spike: load the GPU module closure live on an E phone"
+  },
+  "gpu-05": {
+   "batch": "B41",
+   "issue": 41,
+   "title": "Run the read-only kbase property/context probes on an E phone"
+  },
+  "gpu-10": {
+   "batch": "B41",
+   "issue": 41,
+   "title": "Run off-screen render, stress and fence probes on an E phone"
+  },
+  "gpu-11": {
+   "batch": "B41",
+   "issue": 41,
+   "title": "Spike: GBM scanout BO on card0 while sway holds DRM master"
+  },
+  "gpu-16": {
+   "batch": "B41",
+   "issue": 41,
+   "title": "Spike: GPU OPP table, thermal zones and GED knobs (read-only)"
+  },
+  "gpu-18": {
+   "batch": "B42",
+   "issue": 42,
+   "title": "First sway-on-GPU boot on an E phone"
+  },
+  "gpu-19": {
+   "batch": "B42",
+   "issue": 42,
+   "title": "30-minute soak vs pixman and go/no-go write-up"
+  },
+  "gpu-20": {
+   "batch": "B42",
+   "issue": 42,
+   "title": "GL clients under GPU sway (glmark2-es2-wayland, Firefox)"
+  },
+  "mobile-data-09": {
+   "batch": "B43",
+   "issue": 43,
+   "title": "Read-only CCCI inventory script for Debian (modem down)"
+  },
+  "mobile-data-12": {
+   "batch": "B43",
+   "issue": 43,
+   "title": "Read-only fresh NV backup script with hashes"
+  },
+  "mobile-data-10": {
+   "batch": "B44",
+   "issue": 44,
+   "title": "Read-only Android telephony capture on a phone with a SIM"
+  },
+  "mobile-data-11": {
+   "batch": "B44",
+   "issue": 44,
+   "title": "Capture the vegas radio-on MIPC frame and AT sequence from Android's RIL"
+  },
+  "mobile-data-21": {
+   "batch": "B44",
+   "issue": 44,
+   "title": "Experiment: first modem boot in the NV sandbox, radio off (maintainer-approved only)"
+  },
+  "mobile-data-30": {
+   "batch": "B44",
+   "issue": 44,
+   "title": "Experiment: first mobile data session on a SIM (maintainer-approved only)"
+  },
+  "modem-calls-03": {
+   "batch": "B45",
+   "issue": 45,
+   "title": "Android baseline: does stock Android on vegas make VoLTE calls and send SMS on your carrier?"
+  },
+  "modem-calls-17": {
+   "batch": "B45",
+   "issue": 45,
+   "title": "Android-side capture: AT/MIPC traffic of the vendor RIL during SMS send/receive"
+  },
+  "modem-calls-18": {
+   "batch": "B45",
+   "issue": 45,
+   "title": "Android-side capture: AT/MIPC traffic of the vendor RIL during a VoLTE call"
+  },
+  "modem-calls-21": {
+   "batch": "B45",
+   "issue": 45,
+   "title": "GATED: read-only SIM, LTE and IMS registration status over AT with radio on"
+  },
+  "modem-calls-22": {
+   "batch": "B45",
+   "issue": 45,
+   "title": "GATED: SMS over AT spike with vegas-sms (send one to self, receive one)"
+  },
+  "root-encryption-01": {
+   "batch": "B46",
+   "issue": 46,
+   "title": "Spike: read-only crypto capability survey on a running vegas Debian"
+  },
+  "root-encryption-02": {
+   "batch": "B46",
+   "issue": 46,
+   "title": "Spike: LUKS2 file-container rehearsal and argon2id timing on the phone"
+  },
+  "root-encryption-19": {
+   "batch": "B46",
+   "issue": 46,
+   "title": "Spike (D10): can a DRM client exit cleanly on a running Debian with sway never started?"
+  },
+  "root-encryption-29": {
+   "batch": "B46",
+   "issue": 46,
+   "title": "Spike (D10): DRM client exit inside the initramfs before switch_root"
+  },
+  "root-encryption-20": {
+   "batch": "B46",
+   "issue": 46,
+   "title": "Spike: load the touch driver in the initramfs stage"
+  },
+  "root-encryption-14": {
+   "batch": "B47",
+   "issue": 47,
+   "title": "Stage datadisk-backup: image the main root to the computer and verify"
+  },
+  "root-encryption-28": {
+   "batch": "B47",
+   "issue": 47,
+   "title": "Stage datadisk-restore: write a verified backup back to vegas-disk"
+  },
+  "root-encryption-15": {
+   "batch": "B47",
+   "issue": 47,
+   "title": "Stage datadisk-encrypt: LUKS-format vegas-disk and restore from backup"
+  },
+  "root-encryption-16": {
+   "batch": "B47",
+   "issue": 47,
+   "title": "First on-phone trial: encrypted main root unlocked over USB"
+  },
+  "root-encryption-17": {
+   "batch": "B47",
+   "issue": 47,
+   "title": "Recovery drills on the phone and a recovery runbook"
+  },
+  "root-encryption-22": {
+   "batch": "B47",
+   "issue": 47,
+   "title": "Volume-key PIN as a convenience keyslot"
+  },
+  "root-encryption-23": {
+   "batch": "B47",
+   "issue": 47,
+   "title": "On-screen PIN pad unlock (gated on positive D10 spikes)"
+  }
+ }
+}

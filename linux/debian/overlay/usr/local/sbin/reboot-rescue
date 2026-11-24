@@ -1,0 +1,10 @@
+#!/bin/sh
+# Reboot into the rescue root once (no key timing): leaves a one-shot /rescue in the main root, which init.linux
+# deletes and then boots the rescue root (super partition "linux"). Vol-up taps at the orange screen are still
+# needed to reach Linux at all; without them the phone boots Android and the flag waits for the next Linux boot.
+set -eu
+[ "$(cat /etc/vegas/root-role 2>/dev/null)" = main ] || { echo "reboot-rescue: not on the main root (already rescue?)" >&2; exit 1; }
+[ "${1:-}" = -n ] && { touch /rescue; sync; echo "reboot-rescue: /rescue set; the next Linux boot uses the rescue root"; exit 0; }
+touch /rescue; sync
+echo "reboot-rescue: /rescue set; rebooting (tap Vol-up after the orange screen to enter Linux)"
+exec systemctl reboot

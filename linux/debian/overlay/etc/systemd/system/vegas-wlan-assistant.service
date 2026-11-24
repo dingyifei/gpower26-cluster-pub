@@ -1,0 +1,9 @@
+[Unit]
+Description=MediaTek wlan_assistant (pushes the Wi-Fi NVRAM copy to /dev/wmtWifi; vendor binary)
+ConditionPathExists=/vendor/bin/wlan_assistant
+
+[Service]
+ExecStartPre=/usr/lib/vegas/nvguard
+ExecStart=/vendor/bin/wlan_assistant
+Restart=on-failure
+RestartSec=5

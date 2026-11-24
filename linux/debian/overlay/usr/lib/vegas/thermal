@@ -1,0 +1,58 @@
+#!/bin/bash
+# SoC thermal cap for Debian (vegas-thermal.service). Under Android, throttling below the kernel's only trip
+# (soc_max critical, 113.5 degC) is done by the userspace thermal HAL; nothing does it under Debian, so this does.
+# Every INTERVAL s it reads soc_max and moves each cpufreq policy's scaling_max_freq:
+#   >= THOT  : cap down STEP kHz (not below FLOOR % of that policy's max)
+#   <= TCOOL : cap up STEP kHz (back to the policy's max)
+#   >= TOFF  : power off
+#   no readable soc_max: cap at the floor and warn
+# Logs to the journal only on changes. Thresholds in /etc/vegas/thermal.conf.
+set -u
+THOT=80 TCOOL=70 TOFF=100 STEP=200000 FLOOR=40 INTERVAL=2
+[ -r /etc/vegas/thermal.conf ] && . /etc/vegas/thermal.conf
+TZ_ROOT=${VEGAS_THERMAL:-/sys/class/thermal} CPUFREQ=${VEGAS_CPUFREQ:-/sys/devices/system/cpu/cpufreq}
+ONCE=${VEGAS_ONCE:-0}
+
+zone=""
+for z in "$TZ_ROOT"/thermal_zone*; do [ "$(cat "$z/type" 2>/dev/null)" = soc_max ] && { zone=$z; break; }; done
+[ -n "$zone" ] || echo "WARNING: no soc_max thermal zone; capping CPUs at the floor"
+
+declare -A MAX MIN CAP
+for p in "$CPUFREQ"/policy*; do
+  [ -w "$p/scaling_max_freq" ] || continue
+  MAX[$p]=$(cat "$p/cpuinfo_max_freq"); MIN[$p]=$(cat "$p/cpuinfo_min_freq")
+  f=$(( MAX[$p] * FLOOR / 100 )); (( f < MIN[$p] )) && f=${MIN[$p]}; MIN[$p]=$f
+  c=$(cat "$p/scaling_max_freq" 2>/dev/null)   # start from the cap in force (a restart while hot must not raise it)
+  [[ "$c" =~ ^[0-9]+$ ]] || c=${MAX[$p]}; (( c > MAX[$p] )) && c=${MAX[$p]}; (( c < MIN[$p] )) && c=${MIN[$p]}
+  CAP[$p]=$c
+done
+(( ${#CAP[@]} )) || { echo "no writable cpufreq policy; nothing to do"; exit 0; }
+
+last=""
+apply() {  # $1 = reason
+  local p out=""
+  for p in "${!CAP[@]}"; do
+    echo "${CAP[$p]}" > "$p/scaling_max_freq" 2>/dev/null
+    out+="${p##*/}=$(( CAP[$p] / 1000 ))MHz "
+  done
+  [ "$out" = "$last" ] || { echo "$1: ${out% }"; last=$out; }
+}
+
+while :; do
+  t=""; [ -n "$zone" ] && t=$(cat "$zone/temp" 2>/dev/null)
+  if ! [[ "$t" =~ ^-?[0-9]+$ ]]; then
+    for p in "${!CAP[@]}"; do CAP[$p]=${MIN[$p]}; done; apply "no SoC temperature"
+  else
+    c=$(( t / 1000 ))
+    if (( c >= TOFF )); then echo "SoC ${c} degC >= $TOFF: power off"; systemctl poweroff; exit 0; fi
+    if (( c >= THOT )); then
+      for p in "${!CAP[@]}"; do n=$(( CAP[$p] - STEP )); (( n < MIN[$p] )) && n=${MIN[$p]}; CAP[$p]=$n; done
+      apply "SoC ${c} degC >= $THOT"
+    elif (( c <= TCOOL )); then
+      for p in "${!CAP[@]}"; do n=$(( CAP[$p] + STEP )); (( n > MAX[$p] )) && n=${MAX[$p]}; CAP[$p]=$n; done
+      apply "SoC ${c} degC <= $TCOOL"
+    fi
+  fi
+  (( ONCE )) && exit 0
+  sleep "$INTERVAL"
+done

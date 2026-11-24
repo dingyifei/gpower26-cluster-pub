@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "menu $*" >> "$VEGAS_SYSROOT/cmds"
+sleep 0.5; cat "$VEGAS_SYSROOT/menu-answer" 2>/dev/null; exit 0

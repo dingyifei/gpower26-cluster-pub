@@ -1,0 +1,49 @@
+#!/bin/sh
+# Edge swipes on the touch screen (spec 6.3; design page "Terminal", gestures), started once by the sway config:
+#   exec choom -n 0 -- /usr/lib/vegas/vegas-gestures
+# Runs lisgd 0.3.7 on ILITEK_TDDI (found by name, never by event number) and restarts it when it exits;
+# vegas-rotate kills lisgd after a rotation so it comes back with the new orientation.
+#   swipe up from the bottom edge   -> show the keyboard (vegas-kbd show: the person's choice, kept for shell windows)
+#   swipe in from the left edge     -> previous tmux window of "main"
+#   swipe in from the right edge    -> next tmux window
+# Edge band ~96 px (design) instead of lisgd's fixed 50 units: lisgd measures edges in -w/-h units, so the panel's
+# native 1080x2388 is given as 563x1244 (50 units = 96 px), and -t 65 units = ~125 px (8 mm) of travel.
+# These are portrait-native numbers on purpose: lisgd reads raw device coordinates and turns the edges itself (-o).
+# Orientation (spec 6.3): sway transform 90 -> -o 1, 270 -> -o 3. On #5 transform 90 puts the camera (panel top) on
+# the user's LEFT, so the user's bottom edge is the panel's raw left edge, and lisgd -o 1 turns "DU from B" into raw
+# "LR from L". (lisgd's own Wayland path maps wl_output 90 -> 3, but sway's clockwise "transform 90" is not that
+# protocol value; do not copy it.) [UNVERIFIED on #5: if directions are wrong after vegas-rotate, set
+# VEGAS_GESTURE_O90=3 VEGAS_GESTURE_O270=1].
+# lisgd never grabs: an edge swipe also reaches the terminal as a short scroll. When vegas-keys grabs the touch
+# device (screen off) lisgd sees nothing. Gesture commands must not contain commas (lisgd splits -g on ',').
+# Never touches sway (D10); a lisgd crash only loses gestures.
+set -u
+UI=/run/vegas-ui
+mkdir -p -m 700 $UI
+
+touch_dev() {
+  for n in /sys/class/input/event*; do
+    [ "$(cat "$n/device/name" 2>/dev/null)" = ILITEK_TDDI ] && { echo "/dev/input/${n##*/}"; return 0; }
+  done
+  return 1
+}
+
+# in the background: lisgd waits in system() for the command, and the verb starts Python
+KBD_SHOW="/usr/lib/vegas/vegas-kbd show >/dev/null 2>&1 &"
+fast=0
+while :; do
+  if ! command -v lisgd >/dev/null; then echo "vegas-gestures: lisgd is not installed" >&2; sleep 60; continue; fi
+  dev=$(touch_dev) || { sleep 5; continue; }
+  case $(cat $UI/rotation 2>/dev/null) in
+    90)  o=${VEGAS_GESTURE_O90:-1} ;;
+    270) o=${VEGAS_GESTURE_O270:-3} ;;
+    *)   o=0 ;;
+  esac
+  start=$(cut -d. -f1 /proc/uptime)
+  lisgd -d "$dev" -o "$o" -w 563 -h 1244 -t 65 \
+    -g "1,DU,B,*,R,$KBD_SHOW" \
+    -g "1,LR,L,*,R,tmux previous-window -t main" \
+    -g "1,RL,R,*,R,tmux next-window -t main"
+  if [ $(( $(cut -d. -f1 /proc/uptime) - start )) -lt 5 ]; then fast=$((fast + 1)); else fast=0; fi
+  if [ $fast -ge 5 ]; then sleep 5; else sleep 1; fi
+done

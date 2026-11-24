@@ -1,0 +1,13 @@
+[Unit]
+Description=Load curated vegas vendor modules
+DefaultDependencies=no
+Before=sysinit.target
+ConditionPathExists=/etc/vegas/modules.list
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'grep -v "^#" /etc/vegas/modules.list | while read -r m; do [ -n "$m" ] && modprobe "$m"; done; true'
+
+[Install]
+WantedBy=sysinit.target

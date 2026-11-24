@@ -1,0 +1,111 @@
+#!/bin/bash
+# Wi-Fi hotspot beside the phone's own Wi-Fi connection: vegas-hotspot on [minutes] | off | status | show | newpass
+# Verified on #5 2026-11-23 (Q25): "A" > /dev/wmtWifi makes the vendor driver add ap0 (type AP) while wlan0 stays
+# connected; hostapd (WPA2-PSK) on ap0 on wlan0's own channel; busybox udhcpd; iptables-legacy NAT out of wlan0;
+# "S" > /dev/wmtWifi removes ap0 again. Two clients joined and browsed; no chip reset. Only 2.4 GHz was tried.
+# Never on after a boot (state in /run) and it turns itself off: default 60 min (D15). Name and passphrase are made
+# at first use in /etc/vegas/hotspot.conf (root only; not in the overlay, so deb-update keeps it). This tool is the
+# file's only writer (designer B7): `newpass` makes a new passphrase (same name), written atomically with mode 0600,
+# and only while the hotspot is off (the running AP and its QR code keep the old one). It prints "new passphrase set",
+# never the passphrase; `show` prints it. Clients get the uplink's own DNS servers. Forwarding is limited to
+# ap0 <-> wlan0, new connections only outward.
+# Test hook: VEGAS_HOTSPOT_CONF replaces /etc/vegas/hotspot.conf.
+set -Eeuo pipefail
+export LC_ALL=C   # the conf regexes use byte ranges ([!-~]), which match nothing in e.g. en_US.UTF-8 (VM)
+C=${VEGAS_HOTSPOT_CONF:-/etc/vegas/hotspot.conf} R=/run/vegas-hotspot UNIT=vegas-hotspot IPT=iptables-legacy
+die() { echo "vegas-hotspot: $*" >&2; exit 1; }
+# 16 of 55 unambiguous characters (~92 bits); `|| true`: tr ends on SIGPIPE (pipefail), the length is checked
+newpsk() { tr -dc a-km-zA-HJ-NP-Z2-9 </dev/urandom | head -c 16 || true; }
+# write SSID $1 + PSK $2 as a new file via rename (an existing file's loose mode is never reused); printf is a builtin,
+# so the passphrase never shows in a process list
+write_conf() {
+  (umask 077; rm -f "$C.new"; printf 'SSID=%s\nPSK=%s\n' "$1" "$2" > "$C.new" && chmod 600 "$C.new" && mv -f "$C.new" "$C")
+}
+conf() {
+  [ -r $C ] || [ ! -e $C ] || die "$C is root-only: run as root"
+  if [ ! -s $C ]; then write_conf "vegas-$(tr -dc a-z0-9 </dev/urandom | head -c 3)" "$(newpsk)" || die "cannot write $C"; fi
+  SSID=$(sed -n 's/^SSID=\([A-Za-z0-9._-]\{1,32\}\)$/\1/p' $C); PSK=$(sed -n 's/^PSK=\([!-~]\{8,63\}\)$/\1/p' $C)
+  [ -n "$SSID" ] && [ -n "$PSK" ] || die "$C needs SSID= (1-32 of A-Z a-z 0-9 . _ -) and PSK= (8-63 printable)"
+}
+nat() {  # $1 = -A or -D, idempotent; accepts before drops
+  local op=$1 r; while read -r r; do
+    set -- $r; local t=""; [ "$1" = -t ] && { t="$1 $2"; shift 2; }
+    if $IPT $t -C "$@" 2>/dev/null; then [ "$op" = -D ] && $IPT $t -D "$@"; else [ "$op" = -A ] && $IPT $t -A "$@"; fi
+  done <<EOF
+-t nat POSTROUTING -s $NET.0/24 -o wlan0 -j MASQUERADE
+FORWARD -i ap0 -o wlan0 -j ACCEPT
+FORWARD -i wlan0 -o ap0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+FORWARD -i ap0 -j DROP
+FORWARD -o ap0 -j DROP
+EOF
+  return 0
+}
+teardown() {
+  set +e; [ -n "${UD:-}" ] && kill "$UD" 2>/dev/null
+  nat -D; [ -e /run/systemd/network/05-usb0-share.network ] || echo 0 > /proc/sys/net/ipv4/ip_forward
+  ip addr flush dev ap0 2>/dev/null; [ -e /sys/class/net/ap0 ] && echo S > /dev/wmtWifi
+  rm -rf $R; echo "hotspot off"
+}
+run() {  # the unit's main process: up, hostapd until the time limit or a stop, then down
+  local min=$1 f i ch hw extra="" rc
+  conf
+  # subnet: not the uplink's own (192.168.43.0/24 is Android's tethering default, so another phone's hotspot uses it)
+  NET=""; for n in 192.168.43 192.168.44 10.43.43; do
+    ip -4 -o addr show | grep -q " inet $n\." || { NET=$n; break; }; done
+  [ -n "$NET" ] || die "no free subnet"
+  f=$(iw dev wlan0 link 2>/dev/null | sed -n 's/^[[:space:]]*freq: \([0-9]*\).*/\1/p')
+  case "$f" in
+    "") ch=6 hw=g ;;
+    2484) ch=14 hw=b ;;
+    24[0-9][0-9]) ch=$(( (f - 2407) / 5 )) hw=g ;;
+    5[0-8][0-9][0-9]) ch=$(( (f - 5000) / 5 )) hw=a
+      (( ch >= 52 && ch <= 144 )) && die "uplink on 5 GHz radar channel $ch: an AP cannot share it (move the uplink)"
+      cc=$(iw reg get 2>/dev/null | sed -n 's/^country \([A-Z][A-Z]\):.*/\1/p' | grep -v '^00$' | head -1)
+      [ -n "$cc" ] || die "5 GHz needs a country (iw reg set XX)"
+      extra=$'country_code='"$cc"$'\nieee80211d=1' ;;
+    *) die "uplink on $f MHz: no channel rule" ;;
+  esac
+  mkdir -p -m 700 $R; trap teardown EXIT; trap 'exit 143' TERM
+  printf 'interface=ap0\ndriver=nl80211\nssid=%s\nhw_mode=%s\nchannel=%s\nieee80211n=1\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nwpa_passphrase=%s\nctrl_interface=%s/ctrl\n%s\n' \
+    "$SSID" "$hw" "$ch" "$PSK" "$R" "$extra" > $R/hostapd.conf
+  # `|| true`: with pipefail, no IPv4 DNS server on the uplink (grep finds nothing) would end run() here; 1.1.1.1 then
+  dns=$(resolvectl dns wlan0 2>/dev/null | sed 's/^[^:]*://' | tr ' ' '\n' | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -3 | paste -sd' ' - || true)
+  printf 'start %s.10\nend %s.20\ninterface ap0\noption subnet 255.255.255.0\noption router %s.1\noption dns %s\nlease_file %s/leases\n' \
+    $NET $NET $NET "${dns:-1.1.1.1}" $R > $R/udhcpd.conf; touch $R/leases
+  echo A > /dev/wmtWifi; for i in $(seq 10); do [ -e /sys/class/net/ap0 ] && break; sleep 1; done
+  [ -e /sys/class/net/ap0 ] || die "no ap0 after 'A' > /dev/wmtWifi"
+  ip addr add $NET.1/24 dev ap0; ip link set ap0 up
+  nat -A; echo 1 > /proc/sys/net/ipv4/ip_forward
+  busybox udhcpd -f $R/udhcpd.conf & UD=$!
+  echo "hotspot $SSID on channel $ch ($hw), subnet $NET.0/24, for $min min"
+  rc=0; timeout $(( min * 60 )) hostapd $R/hostapd.conf || rc=$?
+  [ $rc -eq 0 ] || [ $rc -eq 124 ] || die "hostapd exited $rc"
+}
+case "${1:-status}" in
+  on)   [ "$(id -u)" = 0 ] || die "run as root"; systemctl is-active -q $UNIT && die "already on"
+        [ -e /sys/class/net/wlan0 ] && [ -c /dev/wmtWifi ] || die "Wi-Fi is not up (vegas-wifi)"
+        min=${2:-60}; [[ $min =~ ^[1-9][0-9]{0,2}$ ]] && (( min <= 720 )) || die "minutes: 1..720"
+        command -v hostapd >/dev/null || die "needs the hostapd package"
+        conf
+        systemd-run --quiet --unit $UNIT --collect -p SuccessExitStatus=143 "$0" run "$min"
+        for i in $(seq 20); do   # this run's own state: hostapd's control socket says ENABLED
+          hostapd_cli -p $R/ctrl -i ap0 status 2>/dev/null | grep -qx 'state=ENABLED' && break
+          systemctl is-active -q $UNIT || break; sleep 1; done
+        if hostapd_cli -p $R/ctrl -i ap0 status 2>/dev/null | grep -qx 'state=ENABLED'; then
+          echo "on: $SSID (passphrase: vegas-hotspot show), off in $min min"
+        else systemctl stop $UNIT 2>/dev/null || true
+          journalctl -u $UNIT --since "-30s" -o cat --no-pager | grep -vi passphrase | tail -5 >&2; die "the AP did not come up"; fi ;;
+  off)  systemctl stop $UNIT 2>/dev/null || true; echo "hotspot off" ;;
+  run)  [ -n "${2:-}" ] || die "run needs minutes"; run "$2" ;;
+  show) conf; printf 'SSID %s\npassphrase %s\n' "$SSID" "$PSK" ;;
+  newpass)
+        [ "$(id -u)" = 0 ] || die "run as root"
+        ! systemctl is-active -q $UNIT || die "turn the hotspot off first (it uses the current passphrase)"
+        conf; p=$(newpsk); [ ${#p} = 16 ] || die "no random passphrase"
+        write_conf "$SSID" "$p" || die "cannot write $C"
+        echo "new passphrase set" ;;
+  status) if systemctl is-active -q $UNIT; then
+            n=$(hostapd_cli -p $R/ctrl -i ap0 list_sta 2>/dev/null | grep -c . || true); conf; echo "on: $SSID, $n device(s)"
+          else echo off; fi ;;
+  *) echo "usage: vegas-hotspot on [minutes] | off | status | show | newpass" >&2; exit 2 ;;
+esac

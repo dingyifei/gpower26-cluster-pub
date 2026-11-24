@@ -1,0 +1,40 @@
+# vegas screen UI: sway on DSI-1 (config /etc/vegas/sway/config). Enabled (build.sh, deb-update): reboots with it alive
+# ended cleanly on #5 (2026-11-23, Q4); power-off with it alive is not yet tested. Main root only (root-role): the
+# rescue root stays without a compositor, so a sway/mediatek_drm oops (panic_on_oops=1) cannot take the rescue root too.
+# The compositor must never exit: on this kernel a compositor exit (drm plane disable) oopses mediatek_drm and the
+# panic reboots the phone. So this unit is never stopped:
+#  - DefaultDependencies=no: no Conflicts=shutdown.target, so `systemctl reboot/poweroff` does not stop it;
+#    RefuseManualStop + IgnoreOnIsolate: `systemctl stop`, rescue/emergency/isolate do not stop it either;
+#  - LIBSEAT_BACKEND=noop (sway runs as root and opens card0/input itself): no seatd, because seatd has default
+#    dependencies, is stopped at shutdown, and would revoke sway's DRM fd first (that is a compositor exit);
+#  - argv0 '@sway': systemd-shutdown's final SIGTERM/SIGKILL pass skips root-owned '@' processes, so the kernel
+#    reboots/powers off with sway still holding the display;
+#  - OOMScoreAdjust=-1000: the OOM killer never picks sway (the config starts its clients at a normal score);
+#  - Restart=no: a sway crash means a kernel oops anyway (panic_on_oops=1).
+# Cost: sway keeps its binary/libraries mapped through shutdown. After an apt upgrade of sway, wlroots or libc the old
+# files are still open, / cannot be remounted read-only and that one shutdown leaves ext4 unclean (journal replay).
+[Unit]
+Description=vegas screen UI (sway; never stopped)
+DefaultDependencies=no
+RefuseManualStop=yes
+IgnoreOnIsolate=yes
+After=vegas-modules.service systemd-udevd.service local-fs.target
+ConditionPathExists=/dev/dri/card0
+ConditionPathExists=/etc/vegas/root-role
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/sway LIBSEAT_BACKEND=noop WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 LANG=C.UTF-8
+# sway's clients inherit this (programs start through `swaymsg exec`): Firefox on Wayland (xwayland is disabled)
+Environment=MOZ_ENABLE_WAYLAND=1
+ExecStartPre=/bin/sh -c '! pgrep -x sway >/dev/null && mkdir -p /run/sway && chmod 700 /run/sway'
+ExecStartPre=-/sbin/modprobe ilitek_v3_mmi
+ExecStart=/bin/bash -c 'exec -a @sway /usr/bin/sway -c /etc/vegas/sway/config >> /run/sway/sway.log 2>&1'
+OOMScoreAdjust=-1000
+Restart=no
+KillMode=none
+SendSIGKILL=no
+TimeoutStopSec=1
+
+[Install]
+WantedBy=multi-user.target

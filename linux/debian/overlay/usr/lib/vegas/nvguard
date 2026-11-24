@@ -1,0 +1,17 @@
+#!/bin/sh
+# Refuse to continue unless the Android NV paths the vendor daemons use are plain directories on Debian's own root
+# (seeded copies), and no NV / userdata partition is mounted anywhere. Used as ExecStartPre by the Android-daemon units.
+root=$(findmnt -n -o SOURCE /)
+for p in /mnt/vendor/nvcfg /mnt/vendor/nvdata /mnt/vendor/protect_f /mnt/vendor/protect_s /data; do
+  [ -e "$p" ] || continue
+  src=$(findmnt -n -o SOURCE --target "$p")
+  [ "$src" = "$root" ] || { echo "nvguard: $p is on $src, not on the Debian root ($root)"; exit 1; }
+done
+for u in /sys/class/block/*/uevent; do
+  n=$(sed -n 's/^PARTNAME=//p' "$u"); case "$n" in
+    nvdata|nvcfg|nvram|protect1|protect2|persist|prodpersist|userdata|metadata|utags*|seccfg|proinfo|efuse)
+      d=/dev/$(basename "$(dirname "$u")")
+      if grep -q "^$d " /proc/mounts; then echo "nvguard: $n ($d) is mounted"; exit 1; fi ;;
+  esac
+done
+exit 0

@@ -1,0 +1,15 @@
+# vendor_dlkm modules loaded at boot by vegas-modules.service (modprobe names, one per line).
+# Thermal sensors + cooling (Android loads these from vendor_dlkm). Never list: utags, mmi_info, md_cooling_all,
+# ccci*/ccmni (modem stack; the Wi-Fi unit pulls ccci in on demand), kernelsu.
+# Verified on #5 2026-11-22: these load cleanly (48 -> 51 thermal zones; SoC/CPU/NTC zones were live already).
+pmic_temp
+board_temp
+thermal_generic_adc
+charger_cooling
+backlight_cooling
+soc_temp_lvts
+# vtskin_temp: loads, but its zones read -274 C (Android thermal HAL fills them); not needed
+# qpnp_adaptive_charge: not needed; /proc/mtk_battery_cmd/current_cmd verified on #5 (2026-11-22)
+# Touch: ILITEK TDDI (verified on #5 2026-11-23). Firmware goes to the IC's RAM on each panel resume, no flash write.
+# Pulls mtk_disp_notify, spi_slave, mediatek-drm, sensors_class. Registers ILITEK_TDDI (touch) and "double-tap".
+ilitek_v3_mmi

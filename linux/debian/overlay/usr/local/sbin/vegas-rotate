@@ -1,0 +1,32 @@
+#!/bin/sh
+# Rotate the panel and move the safe-area gaps with it: vegas-rotate normal|90|270
+# Panel insets (portrait, logical px at scale 3): camera band top 28 (the bar covers it), bottom 16, sides 10.
+# Landscape (#5, 2026-11-23): transform 90 puts the camera cutout on the LEFT, 270 on the RIGHT; the cutout side
+# gets 32 (28 was "mostly clear" at 90), the opposite side 16 (the old bottom). Touch follows the transform (input map_to_output DSI-1).
+# One rotation per call, never in a loop and never while a finger is down (callers start it from a key, a menu row or a
+# button release).
+set -eu
+export SWAYSOCK=${SWAYSOCK:-$(ls /run/sway/sway-ipc.*.sock 2>/dev/null | head -1)}
+[ -S "${SWAYSOCK:-}" ] || { echo "vegas-rotate: sway is not running" >&2; exit 1; }
+case "${1:-}" in
+  normal|0) t=normal; l=10 r=10 b=16 ;;
+  90)       t=90;     l=32 r=16 b=10 ;;
+  270)      t=270;    l=16 r=32 b=10 ;;
+  *) echo "usage: vegas-rotate normal|90|270 (180 is not offered: the camera band would sit under the keyboard)" >&2; exit 2 ;;
+esac
+swaymsg -q "output DSI-1 transform $t; gaps left all set $l; gaps right all set $r; gaps bottom all set $b"
+# record it for the UI (vegas-keys/vegas-menu Rotate row, Home's SCREEN buttons, vegas-gestures; UI spec 5.8) and
+# restart lisgd so vegas-gestures brings it back with the new orientation (-o). lisgd is a client, never sway (D10).
+mkdir -p -m 700 /run/vegas-ui
+echo "$t" > /run/vegas-ui/rotation
+[ "$t" = normal ] || echo "$t" > /run/vegas-ui/rotation-last
+# Kill a client only while its restart loop runs (comm of `/bin/sh /usr/lib/vegas/vegas-kbd` is vegas-kbd): a session
+# started by an older sway config (deb-update takes effect at the next boot) runs wvkbd-mobintl with a plain exec and
+# nothing would bring it back.
+pgrep -x vegas-gestures >/dev/null && pkill -x lisgd || true
+# The stock keyboard (wvkbd 0.15) found its landscape layer by itself on #5 (designer ruling 5), so it is left alone.
+# Only with /etc/vegas/kbd-landscape-restart (see vegas-kbd) is it restarted, with -H 144 in landscape and the same
+# shown/hidden state. Keyboard v2 (wvkbd 0.21) follows by itself.
+if [ -e "${VEGAS_KBD_LANDSCAPE_RESTART:-/etc/vegas/kbd-landscape-restart}" ]; then
+  pgrep -x vegas-kbd >/dev/null && pkill -x wvkbd-mobintl || true
+fi

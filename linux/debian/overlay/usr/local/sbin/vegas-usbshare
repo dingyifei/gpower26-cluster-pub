@@ -1,0 +1,44 @@
+#!/bin/sh
+# Share the phone's Wi-Fi with the computer on the USB cable: vegas-usbshare on|off|status   (Q26, #5 2026-11-23)
+# Until reboot only: a /run networkd file (sorts before /etc's 10-usb0.network) makes the USB DHCP server offer the
+# phone as router and the uplink's own DNS servers (a hotel's sign-in page often resolves only through those);
+# iptables-legacy NATs 172.16.42.0/24 out of the uplink; ip_forward=1. Forwarding is limited to usb0 <-> uplink,
+# new connections only outward.
+# Not networkd's IPMasquerade=: this kernel has iptables NAT built in but no nf_tables, and networkd 257 tries
+# nftables first, times out ("Could not enable IP masquerading: Connection timed out") and marks usb0 failed.
+# The Mac keeps its own default route: macOS adds the USB router as a scoped route only (curl --interface en19).
+# usb0 is the SSH lifeline: changing its DHCP offer briefly reconfigures it (existing SSH sessions survive).
+set -eu
+NET=172.16.42.0/24 F=/run/systemd/network/05-usb0-share.network
+IPT=iptables-legacy; command -v $IPT >/dev/null || { echo "vegas-usbshare: needs the iptables package" >&2; exit 1; }
+# the uplink is recorded in the /run file by `on`, so `off` removes exactly what `on` added
+UP=$(sed -n 's/^# uplink=\([A-Za-z0-9._-]*\)$/\1/p' "$F" 2>/dev/null | head -1); UP=${UP:-${VEGAS_UPLINK:-wlan0}}
+rules() {  # $1 = -A (add, if missing) or -D (delete, if present); order matters: accepts before the drops
+  op=$1
+  for r in "-t nat POSTROUTING -s $NET -o $UP -j MASQUERADE" "FORWARD -i usb0 -o $UP -j ACCEPT" \
+           "FORWARD -i $UP -o usb0 -m state --state RELATED,ESTABLISHED -j ACCEPT" \
+           "FORWARD -i usb0 -j DROP" "FORWARD -o usb0 -j DROP"; do
+    set -- $r
+    case "$1" in -t) t="$1 $2"; shift 2 ;; *) t="" ;; esac
+    if $IPT $t -C "$@" 2>/dev/null; then [ "$op" = -D ] && $IPT $t -D "$@"; else [ "$op" = -A ] && $IPT $t -A "$@"; fi
+  done; return 0
+}
+other_nat() { $IPT -t nat -S POSTROUTING 2>/dev/null | grep -v -- "-s $NET " | grep -q MASQUERADE; }  # the hotspot's
+reconf() { networkctl reload; networkctl reconfigure usb0; }
+case "${1:-status}" in
+  on)  [ -e "$F" ] && { echo "vegas-usbshare: already on (uplink $UP)"; exit 0; }
+       UP=${VEGAS_UPLINK:-wlan0}; [ -e "/sys/class/net/$UP" ] || { echo "vegas-usbshare: no $UP (Wi-Fi off?)" >&2; exit 1; }
+       dns=$(resolvectl dns "$UP" 2>/dev/null | sed 's/^[^:]*://' | tr ' ' '\n' | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -3 | paste -sd' ' -)
+       dns=${dns:-1.1.1.1}
+       mkdir -p "${F%/*}"
+       { printf '# written by vegas-usbshare (until reboot)\n# uplink=%s\n' "$UP"
+         sed -e "s/^EmitDNS=no/EmitDNS=yes\nDNS=$dns/" -e 's/^EmitRouter=no/EmitRouter=yes/' /etc/systemd/network/10-usb0.network
+       } > "$F.new" && mv "$F.new" "$F"
+       rules -A; echo 1 > /proc/sys/net/ipv4/ip_forward; reconf
+       echo "USB sharing on via $UP, DNS $dns (the computer must renew its DHCP lease to get the route)" ;;
+  off) rm -f "$F"; rules -D; other_nat || echo 0 > /proc/sys/net/ipv4/ip_forward; reconf; echo "USB sharing off" ;;
+  status) if [ -e "$F" ] && $IPT -t nat -C POSTROUTING -s $NET -o "$UP" -j MASQUERADE 2>/dev/null; then
+            echo "on via $UP ($($IPT -t nat -L POSTROUTING -v -n -x | awk '/MASQUERADE/ && /172\.16\.42/ {print $2" bytes out"; exit}'))"
+          else echo off; fi ;;
+  *) echo "usage: vegas-usbshare on|off|status" >&2; exit 2 ;;
+esac

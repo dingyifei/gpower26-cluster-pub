@@ -1,0 +1,536 @@
+#!/usr/bin/python3
+"""vegas-status: the phone's status in three forms (UI spec section 1; design page "Status data" / "Terminal").
+
+  vegas-status [--report]   plain text report for any shell (SSH, serial, rescue); colour only on a tty
+  vegas-status --bar        swaybar feed (i3bar JSON, click events): the top strip. /usr/lib/vegas/swaystatus execs it
+  vegas-status --bar-once   one strip line as JSON (tests, tuning)
+  vegas-status --glance     the glance window's content: execs /usr/lib/vegas/vegas-glance (falls back to the report)
+  vegas-status --ruler on|off|status   one-off camera-hole ruler in the running strip (see RULER below)
+  vegas-status --ruler-once [width]    the ruler's blocks as JSON (tests)
+
+Strip (one line, 36 logical px tall over the camera band; nothing in the middle where the camera hole is):
+  left : 09:14 vegas5 MAIN [AWAY]         (RESCUE amber off the main root; "rescue pending" amber while /rescue)
+         AWAY turns into a red "AWAY ssh open" (upright "SSH OPEN") while Away is on but /run/vegas-ui/away-ssh says
+         SSH is open on Wi-Fi (ruling B1: the badge never claims protection that is not in force)
+  right: wifi usb 41° [cap 80%] 78%▲[100] [AP 2] kbd
+         words dim when the link is down; 78% amber <=15 red <=5; ▲ charging, = holding, ▼ on battery; amber 100
+         after the glyph only while charge-to-full is on (ruling 3a: no band top in normal running); AP = Wi-Fi
+         hotspot device count or "AP usb" for USB sharing; kbd = on-screen keyboard: a slate badge like MAIN while
+         shown, plain dim "kbd" while hidden (ruling 3b). An amber fill means something switched on that must not be
+         forgotten: AWAY, AP, RESCUE, rescue pending (amber text), charge to full (amber 100).
+  Upright each side gets half the strip minus the camera-hole gap (~18 characters), so things drop in a fixed order
+  (strip_layout): left = hostname first; right = AP count, "usb", the cap block (SoC turns red), "wifi".
+  Normal upright: "09:14 vegas5 MAIN   (hole)   wifi 41° 78%▲ kbd"; rotated (796 wide) everything shows:
+  "09:14 vegas5 MAIN ... wifi usb 41° 78%▲ kbd".
+  taps : left half -> Home (tmux main:0), wifi/usb -> Network (main:1), kbd -> show/hide wvkbd, others -> Home.
+  The feed writes its pid to /run/vegas-ui/strip.pid; vegasui.uictl sends it SIGUSR1 after every keyboard change
+  (the tmux window rule, a swipe, a field), so the kbd badge follows at once instead of at the next 10 s read.
+Cost: no fork in steady state. File reads every 5 s (SoC temperature, CPU cap), 10 s (links, badges, panel width
+over the sway socket), 60 s (battery, guard); a sway "output" subscription re-fits the strip right after a rotation.
+Prints a new line only when something shown changed; the clock changes on the minute. Only a running Wi-Fi hotspot
+adds one `vegas-hotspot status` per 10 s (device count).
+Decisions: D10 (never touches the compositor: the strip only reads, taps run tmux and 'workspace number 1'),
+D15 (hotspot badge), D17 (AWAY badge), D9 (MAIN/RESCUE), Q21 (charger = primary_chg/online), spec 1.2 charging word.
+Test hooks: VEGAS_SYSROOT (fake sysfs/run/etc tree), VEGAS_SBIN (tool dir), VEGAS_STRIP_* (layout, see STRIP below).
+
+RULER (one-off, to measure the camera hole on the glass; ruling 3): while /run/vegas-ui/strip-ruler exists, the
+running feed draws a ruler instead of the strip: cells exactly 10 logical px wide (30 px on the panel), alternating
+two greys, each numbered with its left edge in tens of px (cell 17 = x 170-180; every 5th number amber). Read which
+numbers the hole hides. Turn it on and off from any root shell, no sway reload (D10: the feed only reads a file):
+  vegas-status --ruler on      (= touch /run/vegas-ui/strip-ruler + SIGUSR1 to the feed: shows at once)
+  vegas-status --ruler off     (= rm the file + SIGUSR1: the normal strip comes back at once)
+Without the signal the feed notices the file within 5 s. The flag is in /run, so a reboot clears it too.
+"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+_here = os.path.dirname(os.path.realpath(__file__))
+for _d in (os.environ.get("VEGAS_UI_LIB"), os.path.join(_here, "../../lib/vegas/ui"), "/usr/lib/vegas/ui"):
+    if _d and os.path.isdir(os.path.join(_d, "vegasui")):
+        sys.path.insert(0, os.path.abspath(_d))
+        break
+from vegasui import readers as R, charge, swayipc   # noqa: E402
+from vegasui.theme import AMBER, RED, DIM, TEXT, BUTTON, INK, ROLE   # noqa: E402
+
+RULER_FLAG = R.UI + "/strip-ruler"
+
+
+def _env_num(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# [BUILDER CHOICE] strip geometry in logical px; tune on #5 with grim (phone test plan).
+# CHAR_PX: advance of "monospace 10" = DejaVu Sans Mono (13.33 px em x 0.602), measured 8.03 in the VM's headless
+# sway 1.10.1 at scale 3; ▲/▼ come out ~1.5 cells wide (WIDE). PAD: the config's status_edge_padding. HOLE: width
+# kept free around the centre of the upright strip, where the camera hole is (design page: "in the middle of one
+# short side"; its size is unmeasured, 20 = 60 px = 3.9 mm). Rotated, the hole is at a short side, not in the strip.
+# SAFETY: slack for a right group wider than estimated; the left block's min_width leaves it free, so the left text
+# starts at PAD + SAFETY (the upright left budget subtracts it, or the left text reaches into the hole gap).
+STRIP = {k: _env_num("VEGAS_STRIP_" + k, v) for k, v in
+         {"CHAR_PX": 8.03, "WIDE": 1.5, "PAD": 20, "HOLE": 20, "SAFETY": 2}.items()}
+
+
+# ======================================================================================== values
+def snapshot(want_tools=True):
+    """Everything any view shows; cheap except where noted. Never raises for a missing value."""
+    bat, g = R.battery(), R.guard()
+    w, u = R.wifi(), R.usb()
+    word, role, glyph = charge.word(bat, g)
+    return {"bat": bat, "guard": g, "word": word, "role": role, "glyph": glyph,
+            "soc_t": R.soc_temp(), "cap": R.cpu_cap(), "wifi": w, "usb": u,
+            "hot": R.hotspot(cheap_only=not want_tools), "away": R.away(), "rescue": R.rescue_pending(),
+            "role_root": R.root_role(), "host": R.hostname(), "kbd": R.kbd_shown(), "away_open": R.away_open()}
+
+
+def soc_colour(t):
+    return ROLE.get(R.soc_temp_role(t))
+
+
+def bat_colour(soc):
+    return ROLE.get(R.bat_level_role(soc))
+
+
+# ======================================================================================== strip (--bar)
+def esc(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+class Text:
+    """Pieces of (text, fg, bg, bold); len() = characters (monospace, so width = len * CHAR_PX)."""
+
+    def __init__(self, *pieces):
+        self.p = [x if isinstance(x, tuple) else (x, None, None, False) for x in pieces]
+
+    def add(self, text, fg=None, bg=None, bold=False):
+        self.p.append((text, fg, bg, bold))
+        return self
+
+    def badge(self, text, kind="normal"):
+        """amber = something switched on that must not be forgotten (AWAY, AP, RESCUE); normal = slate (MAIN, kbd
+        shown); plain = no fill, dim text, same width (kbd hidden)."""
+        if kind == "plain":
+            return self.add(" %s " % text, DIM)
+        fg, bg = (INK, AMBER) if kind == "amber" else (INK, RED) if kind == "red" else (TEXT, BUTTON)
+        return self.add(" %s " % text, fg, bg, True)
+
+    def __len__(self):
+        return sum(len(t) for t, *_ in self.p)
+
+    def px(self):
+        """Width in logical px (monospace; the triangles fall back to a wider glyph)."""
+        return sum(STRIP["CHAR_PX"] * (STRIP["WIDE"] if ch in "▲▼" else 1) for t, *_ in self.p for ch in t)
+
+    def markup(self):
+        out = []
+        for t, fg, bg, bold in self.p:
+            a = (['foreground="%s"' % fg] if fg else []) + (['background="%s"' % bg] if bg else []) + \
+                (['weight="bold"'] if bold else [])
+            out.append("<span %s>%s</span>" % (" ".join(a), esc(t)) if a else esc(t))
+        return "".join(out)
+
+
+def strip_layout(s, now, width, rshrink=0, lshrink=0):
+    """(left Text, [(name, Text)]) for one strip.
+    lshrink (left side): 1 drop the hostname, 2 "rescue pending" -> "rescue", 3 drop MAIN (RESCUE -> RESC) while AWAY is shown,
+    4 the red "AWAY ssh open" -> "SSH OPEN", 5 drop RESC next to it (the open SSH is the more urgent word).
+    rshrink (right side, cumulative): 1 AP device count, 2 the usb word, 3 the cap block (the SoC temperature turns
+    red instead: red = a limit is active), 4 the wifi word, 5 "kbd" -> "k", 6 the AP badge. The band top (amber 100)
+    shows only while charge-to-full is on and is never dropped. Rotated (796 wide) everything fits."""
+    left = Text((now, None, None, True))
+    if s["rescue"]:
+        left.add(" ").add("rescue" if lshrink >= 2 else "rescue pending", AMBER)
+    else:
+        if lshrink < 1:
+            left.add(" " + s["host"])
+        if s["role_root"] == "main":
+            if not (lshrink >= 3 and s["away"]):
+                left.badge("MAIN")
+        elif not (lshrink >= 5 and s.get("away_open")):
+            # "RESCUE AWAY" upright would reach into the hole gap: shorten the badge rather than drop it
+            left.badge("RESC" if lshrink >= 3 and s["away"] else "RESCUE", "amber")
+    if s["away"] and s.get("away_open"):     # B1: Away is on but SSH is open on Wi-Fi: red, never a plain AWAY
+        left.badge("SSH OPEN" if lshrink >= 4 else "AWAY ssh open", "red")
+    elif s["away"]:
+        left.badge("AWAY", "amber")
+
+    h = s["hot"]
+    show_ap = h and rshrink < RSHRINK_MAX
+    right = []
+    net = Text()
+    if rshrink < 4:
+        net.add("wifi", None if s["wifi"]["up"] else DIM)
+    if rshrink < 2:
+        net.add(" usb" if len(net) else "usb", None if s["usb"]["link"] else DIM)
+    if len(net):
+        right.append(("net", net))
+    t, cap = s["soc_t"], s["cap"]
+    capped = bool(cap and cap[0] < 100)
+    tcol = RED if capped and rshrink >= 3 else soc_colour(t)
+    right.append(("soc", Text((" %s°" % ("?" if t is None else t), tcol, None, False))))
+    if capped and rshrink < 3:
+        right.append(("cap", Text((" cap %d%%" % cap[0], RED, None, False))))
+    soc, g = s["bat"]["soc"], s["guard"]
+    bat = Text((" %s%%" % ("?" if soc is None else soc), bat_colour(soc), None, False))
+    gcol = ROLE.get(s["role"]) if s["role"] in ("warn", "limit") else DIM
+    bat.add(s["glyph"], gcol)
+    if g["override"]:   # ruling 3a: the band top only during charge-to-full (amber 100); normal running "78%▲"
+        bat.add(str(g["stop"]), AMBER)
+    right.append(("bat", bat))
+    if show_ap:
+        label = "AP" if rshrink >= 1 else ("AP usb" if h["kind"] == "usb" else
+                                           "AP %s" % (h["devices"] if h["devices"] is not None else ""))
+        right.append(("ap", Text().badge(label.strip(), "amber")))
+    right.append(("kbd", Text().badge("k" if rshrink >= 5 else "kbd", "normal" if s["kbd"] else "plain")))
+    return left, right
+
+
+RSHRINK_MAX = 6
+LSHRINK_MAX = 5
+
+
+def strip_blocks(s, now, width):
+    """i3bar blocks for one strip, fitted to the panel width (360 upright, 796 rotated). swaybar right-aligns all
+    blocks; the left block's min_width (logical px, checked in the VM) pads it out so its text starts at the left."""
+    pad, safety = STRIP["PAD"], STRIP["SAFETY"]
+    upright = width < 400
+    side = width / 2 - STRIP["HOLE"] / 2 - pad          # upright: room on each side of the camera hole
+    lside = side - safety                               # the left text starts at pad + safety (min_width below)
+    room = width - 2 * pad - safety                     # rotated: room for both sides together
+    lshrink = rshrink = 0
+    while True:
+        left, right = strip_layout(s, now, width, rshrink, lshrink)
+        lpx, rpx = left.px(), sum(t.px() for _, t in right)
+        if upright and lpx > lside and lshrink < LSHRINK_MAX:
+            lshrink += 1
+        elif (rpx > side if upright else lpx + rpx > room) and rshrink < RSHRINK_MAX:
+            rshrink += 1
+        else:
+            break
+    blocks = [{"name": "home", "full_text": left.markup(), "min_width": max(0, int(room - rpx)), "align": "left"}]
+    for name, t in right:
+        blocks.append({"name": name, "full_text": t.markup()})
+    for b in blocks:
+        b.update(markup="pango", separator=False, separator_block_width=0)
+    return blocks
+
+
+# ---------------------------------------------------------------------------------------- ruler (one-off)
+RULER_CELL = 10                       # logical px per numbered cell
+RULER_BG = ("#2B3746", "#55657A")     # alternating cell fills: each colour change is a tick
+RULER_SIZE = 5632                     # label size in 1/1024 pt (5.5 pt: two digits fit in 10 px)
+
+
+def ruler_blocks(width):
+    """Cells of exactly RULER_CELL logical px, right-aligned against status_edge_padding like the strip, so upright
+    (360 - 20 = 340 = 34 cells) cell n spans x = 10n .. 10n+10 from the panel's left edge, labelled n. Rotated, the
+    room is not a multiple of 10, so the left end loses a few px and the labels are only approximate there (the
+    hole is not in the strip then)."""
+    n = int((width - STRIP["PAD"]) // RULER_CELL)
+    lead = (width - STRIP["PAD"]) - n * RULER_CELL
+    blocks = []
+    for i in range(n):
+        x = lead + i * RULER_CELL
+        label = int(round(x / RULER_CELL))
+        fg = AMBER if label % 5 == 0 else TEXT
+        blocks.append({"name": "ruler", "instance": str(label), "min_width": RULER_CELL, "align": "center",
+                       "background": RULER_BG[label % 2],
+                       "full_text": '<span size="%d" foreground="%s"%s>%d</span>'
+                                    % (RULER_SIZE, fg, ' weight="bold"' if label % 5 == 0 else "", label),
+                       "markup": "pango", "separator": False, "separator_block_width": 0})
+    return blocks
+
+
+def ruler_on():
+    return R.exists(RULER_FLAG)
+
+
+def feed_pids():
+    """Running strip feeds: argv (... vegas-status --bar) that catch SIGUSR1 (SigCgt bit 10). An older feed with no
+    handler would die on the signal and leave the strip blank, so it is never signalled."""
+    out = []
+    try:
+        procs = os.listdir("/proc")
+    except OSError:
+        return out
+    for pid in procs:
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                argv = f.read().decode(errors="replace").split("\0")
+            with open("/proc/%s/status" % pid) as f:
+                cgt = int(next(l.split()[1] for l in f if l.startswith("SigCgt:")), 16)
+        except (OSError, StopIteration, ValueError):
+            continue
+        if any(a.endswith("vegas-status") and argv[i + 1:i + 2] == ["--bar"] for i, a in enumerate(argv)) \
+                and cgt & (1 << (signal.SIGUSR1 - 1)):
+            out.append(int(pid))
+    return out
+
+
+def ruler(argv):
+    what = argv[0] if argv else "status"
+    if what not in ("on", "off", "status"):
+        print("usage: vegas-status --ruler on|off|status", file=sys.stderr)
+        return 2
+    if what == "on":
+        ui_write("strip-ruler", "on")
+    elif what == "off":
+        try:
+            os.remove(R.p(RULER_FLAG))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print("vegas-status: %s" % e, file=sys.stderr)
+            return 1
+    found = feed_pids() if what != "status" else []
+    for pid in found:
+        try:
+            os.kill(pid, signal.SIGUSR1)
+        except OSError:
+            pass
+    state = "on" if ruler_on() else "off"
+    if what == "status":
+        print("ruler %s; feeds that follow it: %s" % (state, " ".join(map(str, feed_pids())) or "none"))
+    elif found:
+        print("ruler %s (strip feed %s told)" % (state, " ".join(map(str, found))))
+    else:
+        print("ruler %s; no running feed answers SIGUSR1 (an older feed, or the fallback line, ignores the ruler "
+              "until the strip's next start)" % state)
+    return 0
+
+
+# ---------------------------------------------------------------------------------------- taps
+def ui_write(name, text):
+    d = R.p(R.UI)
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        with open(os.path.join(d, name + ".new"), "w") as f:
+            f.write(text + "\n")
+        os.replace(os.path.join(d, name + ".new"), os.path.join(d, name))
+    except OSError:
+        pass
+
+
+def toggle_keyboard():
+    """The kbd tap is the person's own choice (ruling 8): it goes through the one keyboard model, which takes the
+    lock, signals wvkbd (SIGUSR2 shows, SIGUSR1 hides; one pkill fork, on a tap only) and writes both
+    /run/vegas-ui/kbd (what shows now: the badge) and kbd-user (what a shell window restores)."""
+    from vegasui import uictl
+    uictl.kbd(None, "toggle")
+
+
+def show_window(n):
+    if swayipc.focused_workspace() not in (None, 1):
+        swayipc.command("workspace number 1")
+    try:
+        subprocess.run(["tmux", "select-window", "-t", "main:%d" % n], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def on_click(ev):
+    if ev.get("button") not in (1, 272):        # 1 = left / touch tap
+        return
+    name = ev.get("name")
+    if name == "ruler":
+        return                          # the ruler is for reading only
+    if name == "kbd":
+        toggle_keyboard()
+    elif name == "net":
+        show_window(1)
+    else:
+        show_window(0)
+
+
+def click_reader(wake):
+    for line in sys.stdin:
+        line = line.strip().lstrip("[,").strip()
+        if not line:
+            continue
+        try:
+            on_click(json.loads(line))
+        except Exception as e:       # a bad event must never stop the strip
+            print("vegas-status: click: %s" % e, file=sys.stderr)
+        wake.set()
+
+
+def output_watcher(wake, flag):
+    """Wake the feed when an output changes (a rotation: 360 <-> 796 wide), over a sway IPC subscription, so the
+    strip re-fits at once instead of at the next 10 s read. Read-only; reconnects every 10 s if sway is not there."""
+    while True:
+        try:
+            with swayipc.Sway(timeout=None) as sw:
+                sw.send(swayipc.SUBSCRIBE, '["output"]')
+                while True:
+                    sw.read()
+                    flag.set()
+                    wake.set()
+        except (OSError, ValueError):
+            time.sleep(10)
+
+
+# ---------------------------------------------------------------------------------------- feed loop
+def bar():
+    out = sys.stdout
+    out.write('{"version":1,"click_events":true}\n[\n')
+    out.flush()
+    wake = threading.Event()
+    out_changed = threading.Event()
+    # vegas-status --ruler on|off: redraw now. The handler runs in the main thread, which may hold wake's internal
+    # lock at that instant (inside wake.wait/clear), so it hands set() to a short thread instead of calling it.
+    signal.signal(signal.SIGUSR1, lambda *_: threading.Thread(target=wake.set, daemon=True).start())
+    ui_write("strip.pid", str(os.getpid()))   # uictl pokes this feed (SIGUSR1) when the keyboard changes: badge at once
+    threading.Thread(target=click_reader, args=(wake,), daemon=True).start()
+    threading.Thread(target=output_watcher, args=(wake, out_changed), daemon=True).start()
+    s, last, first, shown_t = None, None, True, None
+    due = {"fast": 0.0, "mid": 0.0, "slow": 0.0}
+    width = swayipc.output_width()
+    while True:
+        try:
+            mono = time.monotonic()
+            if s is None or mono >= due["slow"]:
+                s = snapshot(want_tools=False)
+                due["slow"] = due["mid"] = due["fast"] = 0.0
+            if out_changed.is_set():
+                out_changed.clear()
+                time.sleep(0.2)               # let sway finish the change before asking for the new size
+                width = swayipc.output_width(default=width)
+            if mono >= due["mid"] or wake.is_set():
+                width = swayipc.output_width(default=width)
+                hot = R.hotspot()
+                s.update(wifi=R.wifi(), usb=R.usb(), hot=hot, away=R.away(), rescue=R.rescue_pending(),
+                         kbd=R.kbd_shown(), away_open=R.away_open())
+                s["bat"]["online"] = R.rint(R.CHG)
+                s["word"], s["role"], s["glyph"] = charge.word(s["bat"], s["guard"])
+            if mono >= due["fast"]:
+                # SoC temperature jitters by 1 degC between 5 s reads; each new line repaints the whole bar, so the
+                # shown value only moves by >= 2 degC or when its colour band changes (the report shows it exactly).
+                t = R.soc_temp()
+                if t is None or shown_t is None or abs(t - shown_t) >= 2 or soc_colour(t) != soc_colour(shown_t):
+                    shown_t = t
+                s.update(soc_t=shown_t, cap=R.cpu_cap())
+            for k, period in (("fast", 5), ("mid", 10), ("slow", 60)):
+                if mono >= due[k]:
+                    due[k] = mono + period
+            wake.clear()
+            blocks = ruler_blocks(width) if ruler_on() else strip_blocks(s, R.clock(), width)
+            line = json.dumps(blocks, ensure_ascii=False)
+            if line != last:
+                out.write(("" if first else ",") + line + "\n")
+                out.flush()
+                last, first = line, False
+        except BrokenPipeError:
+            return 0                  # swaybar went away; a new swaybar starts a new feed
+        except Exception as e:
+            print("vegas-status: %s" % e, file=sys.stderr)
+            s = None
+            time.sleep(5)             # never a hot loop on a persistent error
+        to_minute = 60.05 - time.time() % 60
+        wake.wait(max(0.2, min(to_minute, min(due.values()) - time.monotonic())))
+
+
+# ======================================================================================== report
+def report(colour=None):
+    tty = sys.stdout.isatty() if colour is None else colour
+
+    def c(text, fg=None, bold=False):
+        if not tty or not (fg or bold):
+            return str(text)
+        rgb = ";".join(str(int(fg[i:i + 2], 16)) for i in (1, 3, 5)) if fg else None
+        return "\033[%sm%s\033[0m" % (";".join((["1"] if bold else []) + (["38;2;" + rgb] if rgb else [])), text)
+
+    s = snapshot()
+    bat, g, w, u = s["bat"], s["guard"], s["wifi"], s["usb"]
+    L = []
+
+    def row(label, *parts):
+        L.append(c("%-8s" % label, DIM) + " ".join(p for p in parts if p))
+
+    up = R.fmt_uptime(R.uptime_s())
+    L.append(c(s["host"], bold=True) + " Debian %s " % R.debian_version() +
+             c("%s root" % s["role_root"], None if s["role_root"] == "main" else AMBER) + " up " + up)
+    soc = bat["soc"]
+    row("battery", c("%s %%" % ("?" if soc is None else soc), bat_colour(soc)), c(s["word"], ROLE.get(s["role"])),
+        c("band " + R.band(g), AMBER if g["control"] == "none" else None),
+        c(R.fmt_deg(bat["temp"]), ROLE.get(R.bat_temp_role(bat["temp"], s["word"]))))
+    ctext, crole = R.charger(bat["online"])
+    row("", c(ctext, ROLE.get(crole)), R.fmt_amps(bat["current"]))
+    cap = s["cap"]
+    row("soc", c(R.fmt_deg(s["soc_t"]), soc_colour(s["soc_t"])),
+        "?" if not cap else ((c("no cap") if cap[0] >= 100 else c("cap %d %%" % cap[0], ROLE[R.cap_role(cap[0])])) +
+                             " (%d/%d MHz)" % (cap[1], cap[2])))
+    link = R.wifi_link() if w["up"] else {}
+    wparts = ["up" if w["up"] else c("down", DIM), "%d dBm" % link["dbm"] if "dbm" in link else "", w["addr"] or ""]
+    ssid, room = link.get("ssid", ""), 60 - 8 - len(" ".join(x for x in wparts if x)) - 1   # 60 columns max
+    row("wifi", *wparts, ssid if len(ssid) <= room else ssid[:max(0, room - 1)] + "~")
+    row("usb", "up" if u["link"] else c("no link", AMBER), u["addr"] or "")
+    ssh, failed = R.ssh_sessions(), R.failed_units()
+    row("ssh", "%d session%s" % (len(ssh), "" if len(ssh) == 1 else "s"),
+        "units " + c("%s failed" % ("?" if failed is None else failed), AMBER if failed else None),
+        "disk " + R.fmt_gb(R.disk_free()) + " free")
+    h = s["hot"]
+    if h and h["kind"] == "wifi":
+        L.append(c("hotspot wifi: %s, %s device(s)" % (h["ssid"] or "?", "?" if h["devices"] is None else h["devices"]),
+                   AMBER))
+    if R.usbshare_on():
+        L.append(c("hotspot usb: " + (R.run([R.tool("vegas-usbshare"), "status"]) or "on"), AMBER))
+    if s["away_open"]:
+        L.append(c("away on: SSH OPEN on Wi-Fi (vegas-away apply failed; see vegas-away status)", RED))
+    elif s["away"]:
+        L.append(c("away on", AMBER))
+    if s["rescue"]:
+        L.append(c("rescue pending", AMBER))
+    if g["override"]:
+        L.append(c("charge to full (override)", AMBER))
+    elif g["override_ignored"]:
+        L.append(c("charge override ignored (bad file)", AMBER))
+    print("\n".join(L))
+    return 0
+
+
+def glance(argv):
+    g = "/usr/lib/vegas/vegas-glance"
+    if os.access(g, os.X_OK):
+        os.execv(g, [g] + argv)
+    report()
+    time.sleep(30)        # the glance window closes when vegas-keys kills it
+    return 0
+
+
+def main(argv):
+    mode = argv[0] if argv else "--report"
+    if mode == "--bar":
+        return bar()
+    if mode == "--bar-once":
+        width = int(argv[1]) if len(argv) > 1 else swayipc.output_width()
+        print(json.dumps(strip_blocks(snapshot(), R.clock(), width), ensure_ascii=False, indent=1))
+        return 0
+    if mode == "--glance":
+        return glance(argv[1:])
+    if mode == "--ruler":
+        return ruler(argv[1:])
+    if mode == "--ruler-once":
+        width = int(argv[1]) if len(argv) > 1 else swayipc.output_width()
+        print(json.dumps(ruler_blocks(width), ensure_ascii=False, indent=1))
+        return 0
+    if mode in ("--report", "-r"):
+        return report()
+    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)

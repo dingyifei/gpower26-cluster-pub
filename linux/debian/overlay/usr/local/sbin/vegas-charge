@@ -1,0 +1,22 @@
+#!/bin/sh
+# Charge-to-full switch (spec 5.7, D: battery band 70-80 % by default): vegas-charge full|band|status
+#   full   one-off charge to 100 %: /run/vegas-chargeguard/override = STOP=100 RESUME=99, applied now (one guard pass)
+#   band   back to the 70-80 % band of /etc/vegas/chargeguard.conf
+#   status full | band | ignored (chargeguard rejected the file) | full (pending) (written, guard has not run yet)
+# The override is in /run: it ends by itself at the next reboot. Temperature limits still apply (pauses at 42 degC,
+# powers off at 55). The guard is a oneshot started by its timer every 60 s; starting it here is the same pass.
+set -eu
+ST=${VEGAS_ST:-/run/vegas-chargeguard}
+apply() { [ -n "${VEGAS_ST:-}" ] || systemctl start vegas-chargeguard.service || echo "vegas-charge: guard pass failed; the timer applies it within 60 s" >&2; }
+status() {
+  s=$(cat "$ST/override-state" 2>/dev/null || true)
+  if [ ! -e "$ST/override" ]; then echo band
+  else case $s in "override: STOP=100"*) echo full ;; WARNING*) echo ignored ;; *) echo "full (pending)" ;; esac; fi
+}
+case "${1:-}" in
+  full)   mkdir -p "$ST"; printf 'STOP=100\nRESUME=99\n' > "$ST/override.new"; mv -f "$ST/override.new" "$ST/override"
+          apply; status ;;
+  band)   rm -f "$ST/override"; apply; status ;;
+  status) status ;;
+  *) echo "usage: vegas-charge full|band|status" >&2; exit 2 ;;
+esac

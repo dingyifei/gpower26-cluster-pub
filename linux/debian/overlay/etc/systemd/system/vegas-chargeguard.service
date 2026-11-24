@@ -1,0 +1,7 @@
+[Unit]
+Description=vegas battery guard (80/70 % band, temperature limits)
+After=vegas-fuelgauged.service vegas-modules.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/vegas/chargeguard

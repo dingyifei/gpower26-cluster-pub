@@ -1,0 +1,7 @@
+#!/usr/bin/python3
+# vegas-home: launcher for the Vegas touch UI's Home page (tmux window 0, spec 3).
+# Runs as root inside tmux in foot (60 columns); also works over SSH. Code: /usr/lib/vegas/ui/vegasui/home.py
+import sys
+sys.path.insert(0, "/usr/lib/vegas/ui")
+from vegasui.home import main
+main()

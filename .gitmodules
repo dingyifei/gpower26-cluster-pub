@@ -1,0 +1,6 @@
+[submodule "sidemdm"]
+	path = sidemdm
+	url = https://github.com/lukeponio/sidemdm
+[submodule "vegas-freedom"]
+	path = vegas-freedom
+	url = https://github.com/andrewwm/vegas-freedom

@@ -1,0 +1,26 @@
+wvkbd 0.21 fix (GPL-3.0-or-later, applied by build.sh): a Code key with code_mod (our Symbols keys send
+Shift+key) pressed LEFTSHIFT but never released it unless Shift was latched, leaving Shift down in sway until the
+next key. Release the forced modifier with the key.
+
+--- a/keyboard.c
++++ b/keyboard.c
+@@ -300,6 +300,8 @@
+     bool unlatch_shift, unlatch_ctrl, unlatch_alt, unlatch_super, unlatch_altgr, unlatch_tab;
+     unlatch_shift = unlatch_ctrl = unlatch_alt = unlatch_super = unlatch_altgr = unlatch_tab = false;
+     if (kb->last_press) {
++        /* vegas: release a modifier that a key forced (code_mod) and that is not latched; upstream leaves it down */
++        uint32_t forced = kb->last_press->type == Code ? kb->last_press->code_mod & ~kb->mods : 0;
+         unlatch_shift = (kb->mods & Shift) == Shift;
+         unlatch_ctrl = (kb->mods & Ctrl) == Ctrl;
+         unlatch_alt = (kb->mods & Alt) == Alt;
+@@ -349,7 +351,9 @@
+             zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, AltGr, WL_KEYBOARD_KEY_STATE_RELEASED);
+         }
+ 
+-        if (unlatch_shift||unlatch_ctrl||unlatch_alt||unlatch_super||unlatch_altgr||unlatch_tab) {
++        if (forced)
++            zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, forced, WL_KEYBOARD_KEY_STATE_RELEASED);
++        if (forced||unlatch_shift||unlatch_ctrl||unlatch_alt||unlatch_super||unlatch_altgr||unlatch_tab) {
+             zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
+         }
+ 

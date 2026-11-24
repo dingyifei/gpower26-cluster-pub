@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.pytest_cache/
+
+# Local, per-phone and built files. They hold serial numbers, IMEIs, partition dumps and vendor files: never commit them.
+logs/
+linux/work/
+farm-exclude.txt
+devices/*
+!devices/_template.md

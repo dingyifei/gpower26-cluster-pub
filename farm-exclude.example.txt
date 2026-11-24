@@ -1,0 +1,4 @@
+# Phones taken out of farm.py maintenance. One serial per line, then a comment.
+# Copy this file to farm-exclude.txt (gitignored) and list your own experiment unit there.
+# scripts/linux_b.sh refuses to run on a phone that is not listed in farm-exclude.txt.
+# <serial>  # Linux dual-boot experiment unit

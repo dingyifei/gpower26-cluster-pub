@@ -1,0 +1,139 @@
+#!/linux/busybox sh
+# vegas Linux branch, run by the chooser (/init) when Vol-up was held. /proc and /sys are already mounted.
+#  1. /dev, devpts; vendor-ramdisk modules in modules.dep order (part 1)
+#  2. lpmap: linux (rw), vendor_a, vendor_dlkm_a, system_a (ro) from super's LP metadata
+#  3. linux has ext4 label vegas-root + /etc/vegas-linux-root -> USB gadget, mount, switch_root to Debian systemd
+#     otherwise -> rescue: USB gadget + telnet/serial shell; after 10 min (unless /stay) plain reboot = Android
+# Never touches misc, NV partitions or userdata. Logs "<3>linux: ..." to kmsg (pstore after the next boot).
+B=/linux/busybox
+$B mkdir -p /linux/bin /tmp /run /config /newroot
+$B --install -s /linux/bin
+export PATH=/linux/bin
+ismnt() { grep -q "^[^ ]* $1 " /proc/mounts 2>/dev/null; }   # this busybox has no `mountpoint` applet
+ismnt /proc || mount -t proc proc /proc
+ismnt /sys || mount -t sysfs sysfs /sys
+mount -t tmpfs tmpfs /tmp; mount -t tmpfs tmpfs /run
+mount -t devtmpfs devtmpfs /dev || { mount -t tmpfs -o mode=0755 tmpfs /dev; mdev -s; }
+mkdir -p /dev/pts; mount -t devpts -o mode=0620,ptmxmode=0666 devpts /dev/pts; [ -e /dev/ptmx ] || ln -s pts/ptmx /dev/ptmx
+LOG=/tmp/init.log
+log() { echo "linux: $*" >> $LOG; echo "<3>linux: $*" > /dev/kmsg 2>/dev/null; }
+log "start, kernel $(uname -r)"
+
+# ---- modules (vendor ramdisk, dependency order) ----
+ok=0; fail=0; mkdir -p /tmp/ld
+ldmod() {
+  local m="$1" deps rev d
+  [ -e "/tmp/ld/$m" ] && return 0
+  touch "/tmp/ld/$m"
+  [ -f "/lib/modules/$m" ] || { echo "$m (missing)" >> /tmp/insmod.fail; return 1; }
+  deps=$(grep "^/lib/modules/$m:" /lib/modules/modules.dep | cut -d: -f2)
+  rev=""; for d in $deps; do rev="${d##*/} $rev"; done
+  for d in $rev; do ldmod "$d"; done
+  if insmod "/lib/modules/$m" 2>>/tmp/insmod.err; then ok=$((ok+1)); else
+    grep -q "^${m%.ko} \|^$(echo ${m%.ko} | tr - _) " /proc/modules && ok=$((ok+1)) || { fail=$((fail+1)); echo "$m" >> /tmp/insmod.fail; }
+  fi
+}
+while read -r m; do ldmod "${m##*/}"; done < /lib/modules/modules.load
+for m in reboot-mode.ko syscon-reboot-mode.ko; do ldmod "$m"; done
+log "modules: $ok loaded, $fail failed ($(wc -l < /proc/modules) live)"
+
+# ---- USB gadget (NCM + ACM); stays bound across switch_root ----
+gadget() {
+  local i UDC G=/config/usb_gadget/g1
+  for i in $(seq 1 30); do [ -n "$(ls /sys/class/udc 2>/dev/null)" ] && break; sleep 1; done
+  UDC=$(ls /sys/class/udc 2>/dev/null | head -1); [ -n "$UDC" ] || { log "no UDC"; return 1; }
+  for r in /sys/class/usb_role/*/role; do [ -w "$r" ] && echo device > "$r"; done
+  ismnt /config || mount -t configfs none /config
+  mkdir -p $G/strings/0x409 $G/configs/c.1/strings/0x409 $G/functions/ncm.usb0 $G/functions/acm.GS0
+  echo 0x1d6b > $G/idVendor; echo 0x0104 > $G/idProduct
+  echo 0xEF > $G/bDeviceClass; echo 0x02 > $G/bDeviceSubClass; echo 0x01 > $G/bDeviceProtocol
+  SER=$(grep -ao 'androidboot.serialno = "[^"]*"' /proc/bootconfig 2>/dev/null | cut -d'"' -f2)
+  echo "${SER:-vegas}" > $G/strings/0x409/serialnumber
+  echo vegas-linux > $G/strings/0x409/manufacturer; echo "vegas Debian" > $G/strings/0x409/product
+  echo "ncm+acm" > $G/configs/c.1/strings/0x409/configuration
+  [ -e $G/configs/c.1/ncm.usb0 ] || ln -s $G/functions/ncm.usb0 $G/configs/c.1/
+  [ -e $G/configs/c.1/acm.GS0 ] || ln -s $G/functions/acm.GS0 $G/configs/c.1/
+  echo "$UDC" > $G/UDC || { log "bind UDC $UDC failed"; return 1; }
+  log "gadget bound to $UDC"
+}
+
+# ---- rescue: shells + timed reboot to Android ----
+rescue() {
+  log "RESCUE: $*"
+  [ -s /tmp/insmod.fail ] && while read -r l; do log "insmod failed: $l"; done < /tmp/insmod.fail
+  ( sleep 600; [ -e /stay ] || { log "rescue timeout -> reboot (Android)"; sync; reboot -f; } ) &
+  gadget
+  sleep 1; [ -e /dev/ttyGS0 ] || mdev -s
+  ( while :; do [ -e /dev/ttyGS0 ] && setsid sh -c 'exec sh -i </dev/ttyGS0 >/dev/ttyGS0 2>&1'; sleep 1; done ) &
+  for i in $(seq 1 10); do ip link show usb0 >/dev/null 2>&1 && break; sleep 1; done
+  ip addr add 172.16.42.1/24 dev usb0; ip link set usb0 up
+  printf 'start 172.16.42.2\nend 172.16.42.2\ninterface usb0\noption subnet 255.255.255.0\nlease_file /tmp/udhcpd.leases\n' > /tmp/udhcpd.conf
+  touch /tmp/udhcpd.leases; udhcpd /tmp/udhcpd.conf; telnetd -l /linux/bin/sh
+  dmesg > /tmp/dmesg.boot
+  log "rescue shell ready (telnet 172.16.42.1 / ttyGS0); reboot to Android in 600s unless /stay"
+  while :; do sleep 3600; done
+}
+
+# ---- super -> dm-linear ----
+SUPER=""
+for u in /sys/class/block/*/uevent; do grep -qx 'PARTNAME=super' "$u" && SUPER=/dev/$(basename "$(dirname "$u")"); done
+[ -b "$SUPER" ] || rescue "no super block device"
+/linux/lpmap "$SUPER" linux vendor_a:ro vendor_dlkm_a:ro system_a:ro > /tmp/lpmap.txt 2>&1 || rescue "lpmap: $(tail -1 /tmp/lpmap.txt)"
+log "lpmap ok: $(grep -c ' -> ' /tmp/lpmap.txt) partitions mapped"
+# ext4 label straight from the superblock (busybox here has no blkid): magic 0xEF53 at 1080, s_volume_name at 1144
+LABEL=""
+[ "$(dd if=/dev/mapper/linux bs=1 skip=1080 count=2 2>/dev/null | hexdump -e '2/1 "%02x"')" = 53ef ] &&
+  LABEL=$(dd if=/dev/mapper/linux bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
+[ "$LABEL" = vegas-root ] || rescue "linux partition label '$LABEL' (want vegas-root): no Debian yet"
+# ---- main root: ext4 "vegas-root2" on the userdata disk (pinned files in Android's /data, mapped raw by vegasdisk
+# after it checks the table CRCs, uuid, bounds and every canary). Any failure, or a one-shot /rescue file in the main
+# root, or Vol-up held 2 s at the chooser (-> /force_rescue), boots the rescue root (super partition "linux").
+# The main root must carry the completion marker /etc/vegas/root-role = main (written last by datadisk-create).
+sblabel() { [ "$(dd if="$1" bs=1 skip=1080 count=2 2>/dev/null | hexdump -e '2/1 "%02x"')" = 53ef ] &&
+  dd if="$1" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000'; }
+ROOTDEV=/dev/mapper/linux
+mount -t ext4 -o ro /dev/mapper/linux /newroot || rescue "mount linux (read-only) failed"
+VCONF=""; [ -r /newroot/etc/vegas/vegasdisk.conf ] && VCONF=$(cat /newroot/etc/vegas/vegasdisk.conf)
+umount /newroot
+if [ -e /force_rescue ]; then log "Vol-up held 2 s at the chooser: rescue root (main root not mapped)"
+elif [ -z "$VCONF" ]; then log "no /etc/vegas/vegasdisk.conf on the rescue root: rescue root"
+else
+  ANCHOR=$(echo "$VCONF" | sed -n 's/^ANCHOR=\([0-9]*\)$/\1/p'); UUID=$(echo "$VCONF" | sed -n 's/^UUID=\([0-9a-f]*\)$/\1/p')
+  UD=""; for u in /sys/class/block/*/uevent; do grep -qx 'PARTNAME=userdata' "$u" && UD=/dev/$(basename "$(dirname "$u")"); done
+  if [ -b "$UD" ] && [ -n "$ANCHOR" ] && [ -n "$UUID" ] &&
+     /linux/vegasdisk map "$UD" "$ANCHOR" "$UUID" vegas-disk > /tmp/vegasdisk.txt 2>&1; then
+    log "vegasdisk: $(grep ' targets, ' /tmp/vegasdisk.txt)"
+    if [ "$(sblabel /dev/mapper/vegas-disk)" = vegas-root2 ] && mount -t ext4 -o noatime /dev/mapper/vegas-disk /newroot; then
+      if [ -e /newroot/rescue ]; then rm -f /newroot/rescue; umount /newroot; log "one-shot /rescue: booting the rescue root"
+      elif [ -e /newroot/etc/vegas-linux-root ] && [ -x /newroot/sbin/init ] &&
+           [ "$(cat /newroot/etc/vegas/root-role 2>/dev/null)" = main ]; then
+        # boot-failure counter: +1 here, cleared to 0 by vegas-bootok.service once Debian reaches multi-user.target.
+        # Two attempts in a row that never got there -> this boot uses the rescue root, and the counter restarts at 0
+        # (so the boot after that tries the main root again). Writing it can fail: then the main root boots as before.
+        BF=/newroot/var/lib/vegas/bootfail; n=$(head -c 8 "$BF" 2>/dev/null | tr -cd 0-9 | sed "s/^0*//"); n=${n:-0}   # no leading 0: octal
+        if [ "$n" -ge 2 ]; then
+          echo 0 > "$BF"; sync; umount /newroot
+          log "main root started $n times without reaching multi-user.target: rescue root (counter reset to 0)"
+        else
+          mkdir -p "${BF%/*}" && echo $((n + 1)) > "$BF" && sync || log "could not write $BF (counter off this boot)"
+          ROOTDEV=/dev/mapper/vegas-disk; log "main root, boot attempt $((n + 1)) (vegas-bootok clears it)"
+        fi
+      else umount /newroot; log "main root has no Debian marker/init/root-role=main: rescue root"; fi
+    else log "main root: label '$(sblabel /dev/mapper/vegas-disk)' or mount failed: rescue root"; fi
+  else log "vegasdisk refused ($(tail -1 /tmp/vegasdisk.txt 2>/dev/null)): rescue root"; fi
+fi
+if [ "$ROOTDEV" = /dev/mapper/linux ]; then
+  mount -t ext4 -o noatime /dev/mapper/linux /newroot || rescue "mount linux failed"
+  [ -e /newroot/etc/vegas-linux-root ] && [ -x /newroot/sbin/init ] || { umount /newroot; rescue "no Debian marker/init on linux"; }
+fi
+log "root: $ROOTDEV"
+for p in vendor_a:/vendor vendor_dlkm_a:/vendor_dlkm system_a:/android/system; do
+  d=/newroot${p#*:}; mkdir -p "$d"
+  mount -t erofs -o ro "/dev/mapper/${p%%:*}" "$d" || log "mount ${p%%:*} failed (continuing)"
+done
+gadget || log "no gadget (continuing; Debian can retry)"
+mkdir -p /newroot/var/log/vegas; cp /tmp/init.log /tmp/lpmap.txt /tmp/vegasdisk.txt /newroot/var/log/vegas/ 2>/dev/null
+log "switch_root -> Debian"
+for m in dev proc sys config; do ismnt /$m && { mkdir -p /newroot/$m; mount --move /$m /newroot/$m; }; done
+exec switch_root /newroot /sbin/init
+rescue "switch_root failed"

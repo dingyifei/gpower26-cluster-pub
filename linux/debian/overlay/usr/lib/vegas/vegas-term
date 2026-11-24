@@ -1,0 +1,23 @@
+#!/bin/sh
+# Terminal loop (D6, spec 5.2): keeps one foot open on the phone, attached to the tmux session "main". Started once by
+# the sway config (exec choom -n 0 -- /usr/lib/vegas/vegas-term). `exit`, detaching tmux, a foot crash or a text-size
+# change (vegas-home writes /run/vegas-ui/fontsize and kills the pid in term.pid) never leave only the strip: the
+# loop reopens foot in the same tmux place. Backs off to 5 s after 5 fast exits in a row. Never touches sway (D10).
+UI=/run/vegas-ui
+mkdir -p -m 700 $UI
+[ -e $UI/kbd ] || echo shown > $UI/kbd           # wvkbd starts shown (sway config); it has no state query
+export LANG=C.UTF-8 COLORTERM=truecolor
+fast=0
+while :; do
+  size=$(cat $UI/fontsize 2>/dev/null)
+  case $size in [4-9]|[4-9].[0-9]|[4-9].[0-9][0-9]|1[0-9]|1[0-9].[0-9]|1[0-9].[0-9][0-9]) ;; *) size=7.25 ;; esac
+  /usr/lib/vegas/vegas-session
+  start=$(cut -d. -f1 /proc/uptime)
+  # dpi-aware=no: a rotation must not change the font size; no blinking cursor (power, D2)
+  foot -a vegas-term -o "font=JetBrains Mono:size=$size" -o dpi-aware=no -o cursor.blink=no \
+       -o touch.long-press-delay=400 tmux attach -t main &
+  echo $! > $UI/term.pid
+  wait $!
+  if [ $(( $(cut -d. -f1 /proc/uptime) - start )) -lt 5 ]; then fast=$((fast + 1)); else fast=0; fi
+  if [ $fast -ge 5 ]; then sleep 5; else sleep 1; fi
+done

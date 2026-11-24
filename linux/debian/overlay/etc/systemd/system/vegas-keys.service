@@ -1,0 +1,30 @@
+# vegas-keys: hardware keys, backlight, idle dim/off and touch mute for the screen UI (D4, D17, Q15, Q18).
+# Main root only (D9: the rescue root stays headless). Starts before sway so Away's dark, muted screen is in force
+# before anything is drawn, and does not need sway: UI actions wait for the sway socket, keys/backlight work without.
+# Default dependencies: it may be stopped at shutdown (vegas-sway is not, see that unit). It never stops sway.
+[Unit]
+Description=vegas key daemon (Power/volume keys, backlight, screen off)
+ConditionPathExists=/etc/vegas/root-role
+# python3-evdev (build.sh PKGS; deb-update installs it): without it Restart=always would start and crash Python once a
+# second for good. A false condition skips the unit instead (keys then do nothing; touch and SSH still work).
+ConditionPathExists=/usr/lib/python3/dist-packages/evdev
+After=systemd-udevd.service vegas-modules.service
+Before=vegas-sway.service
+# never give up restarting (default StartLimitBurst would stop it after 5 quick crashes)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# back off a persistent start-up failure (broken evdev, an exception before the main loop) to one try a minute, while
+# a daemon that ran >= 30 s comes back within ~1 s (see vegas-keys-backoff; RestartSteps= never resets its count)
+ExecStartPre=-/usr/lib/vegas/vegas-keys-backoff pre
+ExecStartPre=-/sbin/modprobe uinput
+ExecStart=/usr/lib/vegas/vegas-keys
+ExecStopPost=-/usr/lib/vegas/vegas-keys-backoff post
+Restart=always
+RestartSec=1
+# the backoff waits up to 60 s inside ExecStartPre
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

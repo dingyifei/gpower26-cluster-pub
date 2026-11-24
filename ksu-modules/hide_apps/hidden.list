@@ -1,0 +1,5 @@
+# App code dirs to hide (one per line). These refuse `pm disable`/`uninstall` ("non-disable" /
+# "protected package"), even as root, because the firmware's protected-package policy blocks it.
+/product/priv-app/TFDevicePulse
+/system_ext/priv-app/PAKSFinance
+/product/app/LatinImeGoogle

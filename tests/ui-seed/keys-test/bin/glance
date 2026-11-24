@@ -1,0 +1,4 @@
+#!/bin/sh
+trap 'rm -f "$VEGAS_SYSROOT/glance-mapped"; exit 0' TERM
+sleep "$(cat "$VEGAS_SYSROOT/glance-delay" 2>/dev/null || echo 0.3)"; touch "$VEGAS_SYSROOT/glance-mapped"
+while :; do sleep 0.1; done

@@ -1,0 +1,274 @@
+#!/usr/bin/python3
+"""Glance screen and Away PIN pad, drawn inside a large-font foot window (spec 5.4 / 5.5; D4 wake, Q6, D17/Q29).
+
+vegas-keys runs /usr/lib/vegas/vegas-glance on every wake and kills that pid on leave; without arguments it execs
+(same pid) its own window:  foot -a vegas-glance -o 'font=JetBrains Mono:size=22.5' -o pad=0x0 ... vegas-glance --draw
+sway rule: for_window [app_id="vegas-glance"] floating enable, fullscreen enable, border none
+It only draws: it reads no input (touch stays muted; vegas-keys hit-tests the pad with vegasui.pad and writes the pad
+state to /run/vegas-ui/pin as "n=<digits entered> max=6 hl=<index|-> msg=<text>"). Shows the pad while
+/run/vegas-ui/state is "pin", else the glance. Publishes its real cell geometry to /run/vegas-ui/glance-geom.
+Redraws only when something shown changes; no seconds, no blinking cursor. --once prints one frame (tests, SSH).
+Values: read through vegasui.readers/charge and formatted with the same helpers as the strip, Home and the report
+(B3), so the glance can never disagree with them. Test hook: VEGAS_SYSROOT (inherited from vegas-keys in the VM).
+"""
+import fcntl
+import os
+import shutil
+import struct
+import sys
+import termios
+import time
+
+sys.path.insert(0, os.environ.get("VEGAS_UI_LIB", "/usr/lib/vegas/ui"))
+from vegasui import pad, readers as R, charge       # noqa: E402  (B3: the same readers as strip, Home and report)
+
+BG, FG, DIMC, AMBERC, REDC, GREENC = "0B0F14", "D5DBE3", "7F8B99", "F0B429", "FF6B63", "7BD389"
+BTN, QUIET, INK = "2B3746", "17202A", "1C1400"
+ROLE = {"ok": GREENC, "warn": AMBERC, "limit": REDC, "dim": DIMC}
+
+
+def P(path):
+    return R.p(path)
+
+
+def read(path, default=None):
+    return R.rd(path, default)
+
+
+def role(r, plain=FG):
+    """A readers/charge role -> this window's colour (None = plain text)."""
+    return ROLE.get(r, plain)
+
+
+def fg(c, s, bold=False):
+    return f"\x1b[{'1;' if bold else ''}38;2;{int(c[0:2], 16)};{int(c[2:4], 16)};{int(c[4:6], 16)}m{s}\x1b[0m"
+
+
+def bgc(c):
+    return f"\x1b[48;2;{int(c[0:2], 16)};{int(c[2:4], 16)};{int(c[4:6], 16)}m"
+
+
+class Seg:
+    """A run of text with one colour; len() is its width in cells."""
+    def __init__(self, text, color=FG, bold=False):
+        self.text, self.color, self.bold = text, color, bold
+
+    def __len__(self):
+        return len(self.text)
+
+    def render(self):
+        return fg(self.color, self.text, self.bold)
+
+
+def line(width, left, right=()):
+    """1-space margin, left segments, right segments ending at column width-1. Too long: padding goes first, then
+    the margin; values are never cut short (addresses)."""
+    left, right = [s if isinstance(s, Seg) else Seg(s) for s in ([left] if isinstance(left, (str, Seg)) else left)], \
+                  [s if isinstance(s, Seg) else Seg(s) for s in ([right] if isinstance(right, (str, Seg)) else right)]
+    used = sum(map(len, left)) + sum(map(len, right))
+    margin = 1 if used + 2 <= width else 0
+    gap = max(1 if right else 0, width - 1 - margin - used) if margin else max(1 if right else 0, width - used)
+    plain_w = margin + used + gap
+    return " " * margin + "".join(s.render() for s in left) + " " * gap + "".join(s.render() for s in right), plain_w
+
+
+def gather(with_tools=True):
+    """Everything the glance shows, read through vegasui.readers and vegasui.charge exactly as the strip, Home and
+    the report read it (B3): SoC from the soc_max zone (thermal_zone0 only as fallback), addresses by ioctl, SSH
+    from /proc/net/tcp{,6}, the same charging word. Missing values become None / '?'. Forks only for the Wi-Fi
+    hotspot's device count, and only while /run/vegas-hotspot exists and with_tools is set."""
+    b, g = R.battery(), R.guard()
+    word, wrole, _glyph = charge.word(b, g)
+    cap = R.cpu_cap()
+    w, u = R.wifi(), R.usb()
+    return {
+        "now": R.clock(), "date": R.date(),
+        "bat": {"cap": b["soc"], "temp": b["temp"], "online": b["online"], "amps": b["current"]},
+        "word": word, "role": wrole, "band": "%d-%d%%" % (g["resume"], g["stop"]),
+        "soc": R.soc_temp(), "cap": 100 if cap is None else cap[0],
+        "wifi": {"up": w["addr"] is not None, "ip": w["addr"]},
+        "usb": {"link": u["link"], "ip": u["addr"] or "172.16.42.1"},
+        "ssh": len(R.ssh_sessions()), "root": R.root_role(), "up": R.fmt_uptime(R.uptime_s(), short=True),
+        "away": R.away(), "away_open": R.away_open(), "rescue": R.rescue_pending(),
+        "hot": R.hotspot(cheap_only=not with_tools),
+    }
+
+
+def glance_blocks(d, w):
+    """Two blocks of (text, width) lines: battery/processor, network/root (stacked upright, side by side wide)."""
+    b = d["bat"]
+    cap = "?" if b["cap"] is None else f"{b['cap']}%"
+    t, soc = b["temp"], d["soc"]
+    ctext, crole = R.charger(b["online"])
+    A = [
+        line(w, [Seg(d["now"], FG, True)], [Seg(d["date"], DIMC)]),
+        line(w, Seg("BATTERY", DIMC), Seg(cap, role(R.bat_level_role(b["cap"])))),
+        line(w, Seg(d["word"], role(d["role"])), d["band"]),
+        line(w, Seg(ctext, role(crole)), R.fmt_amps(b["amps"])),
+        line(w, Seg("temperature", DIMC), Seg(R.fmt_deg(t, space=False), role(R.bat_temp_role(t, d["word"])))),
+        line(w, Seg("PROCESSOR", DIMC), Seg(R.fmt_deg(soc, space=False), role(R.soc_temp_role(soc)))),
+        line(w, Seg("no cap") if d["cap"] >= 100 else Seg(f"cap {d['cap']} %", role(R.cap_role(d["cap"])))),
+    ]
+    wi, us = d["wifi"], d["usb"]
+    B = [
+        line(w, Seg("NETWORK", DIMC)),
+        line(w, "wifi", Seg(wi["ip"], FG) if wi["up"] else Seg("down", DIMC)),
+        line(w, "usb", Seg(us["ip"]) if us["link"] else Seg("no link", AMBERC)),
+        line(w, "ssh", f"{d['ssh']} session" + ("" if d["ssh"] == 1 else "s")),
+    ]
+    h = d["hot"]
+    if h and h["kind"]:
+        n = h.get("devices")
+        B.append(line(w, Seg(f"hotspot {h['kind']}", AMBERC),
+                      ("?" if n is None else str(n)) if h["kind"] == "wifi" else ""))
+    if d["rescue"]:
+        B.append(line(w, Seg("rescue pending", AMBERC)))
+    if d.get("away_open"):   # B1: Away on, but SSH could not be closed on Wi-Fi: say so in red (17 cells, fits 20)
+        B.append(line(w, Seg("SSH OPEN on Wi-Fi", REDC, True)))
+    # last line: the root word stays; Away adds an amber "away" after it (B5): "main away   up 3d"
+    rc = AMBERC if d["root"] != "main" else FG
+    who = [Seg(d["root"], rc), Seg(" "), Seg("away", AMBERC)] if d["away"] else [Seg(f"{d['root']} root", rc)]
+    B.append(line(w, who, f"up {d['up']}"))
+    return A, B
+
+
+def read_pin():
+    """Pad state written by vegas-keys: (entered, max, highlighted index or None, message)."""
+    raw = read("/run/vegas-ui/pin", "") or ""
+    head, _, msg = raw.partition(" msg=")
+    kv = dict(p.split("=", 1) for p in head.split() if "=" in p)
+    def num(k, dflt):
+        try:
+            return int(kv.get(k, dflt))
+        except ValueError:
+            return dflt
+    hl = kv.get("hl", "-")
+    return num("n", 0), num("max", 6), int(hl) if hl.isdigit() else None, msg.strip()
+
+
+def pin_frame(d, cols, rows):
+    """Rows of the PIN pad view: text block top (left when wide), keys from vegasui.pad."""
+    n, mx, hl, msg = read_pin()
+    keys = pad.layout(cols, rows)
+    tw = keys[0][2] - 1 if cols >= 40 else cols               # text column width
+    b = d["bat"]
+    cap = f"{'?' if b['cap'] is None else b['cap']}%"
+    state = f"{cap} {d['word']}"
+    if len("AWAY") + 1 + len(state) > tw:   # e.g. "100% no charge control" at 20 columns: keep the number only
+        state = cap
+    text = [
+        ("", 0),
+        line(tw, [Seg(d["now"], FG, True)], [Seg(d["date"], DIMC)]),
+        line(tw, Seg("AWAY", REDC if d.get("away_open") else AMBERC), state),   # red: SSH open on Wi-Fi (B1)
+        line(tw, Seg("PIN", DIMC), " ".join("●" * min(n, mx) + "○" * max(0, mx - n))),
+        line(tw, Seg(msg[:tw], AMBERC)) if msg else ("", 0),
+    ]
+    out = []
+    for r in range(rows):
+        s, used = text[r] if r < len(text) else ("", 0)
+        row, col = (s + " " * max(0, tw - used), tw) if used else ("", 0)
+        for i, label, x, y, kw, kh in keys:
+            if y <= r < y + kh:
+                colour = AMBERC if i == hl else (QUIET if i in (pad.BACK, pad.OK) else BTN)
+                ink = INK if i == hl else FG
+                lab = (label if r == y else "").center(kw)
+                row += " " * max(0, x - col) + bgc(colour) + fg(ink, lab, True)[:-4] + "\x1b[0m"
+                col = x + kw
+        out.append(row)
+    return out
+
+
+def frame(d, cols, rows, mode):
+    if mode == "pin":
+        return pin_frame(d, cols, rows)
+    wide = cols >= 40
+    if wide:
+        half = (cols - 2) // 2
+        A, B = glance_blocks(d, half)
+        lines = [""]
+        for i in range(max(len(A), len(B))):
+            a = A[i] if i < len(A) else ("", 0)
+            b = B[i] if i < len(B) else ("", 0)
+            lines.append(a[0] + " " * max(0, half - a[1]) + "  " + b[0])
+    else:
+        A, B = glance_blocks(d, cols)
+        lines = [""] + [s for s, _ in A] + [s for s, _ in B]   # 1 blank row ≈ 150 px top padding (camera band)
+    return (lines + [""] * rows)[:rows]
+
+
+def term_geom():
+    try:
+        r, c, xp, yp = struct.unpack("HHHH", fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b"\0" * 8))
+    except OSError:
+        sz = shutil.get_terminal_size((20, 20))
+        return sz.columns, sz.lines, *pad.DEFAULT_CELL
+    cw, ch = (xp // c, yp // r) if xp and yp and c and r else pad.DEFAULT_CELL
+    return c, r, cw, ch
+
+
+def publish_geom(g):
+    try:
+        os.makedirs(P("/run/vegas-ui"), mode=0o700, exist_ok=True)
+        path = P(pad.GEOM_FILE)
+        with open(path + ".new", "w") as f:
+            f.write("%d %d %d %d\n" % g)
+        os.replace(path + ".new", path)
+    except OSError:
+        pass
+
+
+def mtime(path):
+    try:
+        return os.stat(P(path)).st_mtime_ns
+    except OSError:
+        return 0
+
+
+FOOT = ["foot", "-a", "vegas-glance", "-o", "font=JetBrains Mono:size=22.5", "-o", "pad=0x0", "-o", "dpi-aware=no",
+        "-o", "cursor.blink=no", "-o", f"colors.background={BG}", "-o", f"colors.foreground={FG}"]
+
+
+def main():
+    if len(sys.argv) == 1:                       # started by vegas-keys: become the window (exec keeps the pid)
+        for k, v in (("XDG_RUNTIME_DIR", "/run/sway"), ("WAYLAND_DISPLAY", "wayland-1"), ("LANG", "C.UTF-8")):
+            os.environ.setdefault(k, v)              # vegas-keys is a system service: no client env of its own
+        os.execvp("foot", FOOT + [os.path.abspath(sys.argv[0]), "--draw"])
+    once = "--once" in sys.argv
+    mode_arg = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--mode=")), None)
+    if once:
+        cols, rows, *_ = term_geom() if sys.stdout.isatty() else (20, 20)
+        cols = int(os.environ.get("COLS", cols)); rows = int(os.environ.get("ROWS", rows))
+        mode = mode_arg or ("pin" if read("/run/vegas-ui/state") == "pin" else "glance")
+        print("\n".join(frame(gather(), cols, rows, mode)))
+        return
+    # alternate screen, no cursor, page colours (OSC 10/11), no line wrap
+    sys.stdout.write(f"\x1b[?1049h\x1b[?25l\x1b[?7l\x1b]11;#{BG}\x07\x1b]10;#{FG}\x07\x1b[2J")
+    last, data, data_t, geom, stamp = None, None, 0.0, None, None
+    try:
+        while True:
+            g = term_geom()
+            if g != geom:
+                geom, last = g, None
+                publish_geom(g)
+            st = (read("/run/vegas-ui/state"), mtime("/run/vegas-ui/pin"), time.strftime("%H:%M"))
+            now = time.monotonic()
+            if data is None:
+                data, data_t = gather(with_tools=False), 0.0   # fast first frame, tools on the next pass
+            elif now - data_t >= 10 or st[2] != data["now"]:
+                data, data_t = gather(), now
+            mode = mode_arg or ("pin" if st[0] == "pin" else "glance")
+            out = frame(data, geom[0], geom[1], mode)
+            if out != last or st != stamp:
+                sys.stdout.write("\x1b[H" + "\r\n".join(s + "\x1b[K" for s in out))
+                sys.stdout.flush()
+                last, stamp = out, st
+            time.sleep(0.15 if mode == "pin" else 0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write("\x1b[?7h\x1b[?25h\x1b[?1049l")
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

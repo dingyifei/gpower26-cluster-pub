@@ -1,0 +1,15 @@
+# Enabled by build.sh (proven live on #5 2026-11-23). Not ordered before network.target: sshd never waits for Wi-Fi. wifi-up starts wpa_supplicant@wlan0 itself once wlan0 exists and a network was written (wifi-conf.sh).
+[Unit]
+Description=vegas Wi-Fi (MT6835 connsys via vendor wmt/wlan daemons)
+After=vegas-modules.service local-fs.target
+After=network.target ssh.service
+ConditionPathExists=/linkerconfig/ld.config.txt
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vegas/wifi-up
+TimeoutStartSec=4min
+
+[Install]
+WantedBy=multi-user.target

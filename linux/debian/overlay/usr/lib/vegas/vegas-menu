@@ -1,0 +1,79 @@
+#!/bin/bash
+# Power menu (spec 5.3, D10 never stop sway, Q4, Q10 no "Reboot to Debian"): a bemenu list in the lower half, moved by
+# the volume keys (vegas-keys sends Up/Down/Enter/Esc through its uinput keyboard) or by taps.
+#   vegas-menu [full|full-prog|short] [upright|landscape|auto]   -> prints the chosen row, exit 1 = cancel
+#   vegas-menu --run [variant] [orientation]                     -> same, then carries the row out itself
+#   vegas-menu --do "<row>"                                      -> carries one row out (no menu)
+# vegas-keys runs the plain form and executes the row as root itself (2.7). --run/--do are for use without vegas-keys
+# (SSH, a sway binding, tests). "Power off" asks again ("Power off now"); only that confirmed row powers off.
+# Never: swaymsg exit/reload, stopping vegas-sway; "Screen off" goes through vegas-keys (the only backlight writer).
+set -u
+UI=/run/vegas-ui
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/sway} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-1} LANG=C.UTF-8
+[ -n "${SWAYSOCK:-}" ] || SWAYSOCK=$(ls /run/sway/sway-ipc.*.sock 2>/dev/null | head -1); export SWAYSOCK
+
+rotation() {  # /run/vegas-ui/rotation (written by vegas-rotate once extended, spec 5.8), else ask sway (read-only IPC)
+  cat $UI/rotation 2>/dev/null && return
+  swaymsg -t get_outputs -r 2>/dev/null | python3 -c 'import json,sys
+o=[o for o in json.load(sys.stdin) if o.get("name")=="DSI-1"]; print(o[0].get("transform","normal") if o else "normal")' \
+    2>/dev/null || echo normal
+}
+
+ctl() {  # one line to vegas-keys; fails when nobody reads the FIFO (never blocks)
+  [ -p $UI/ctl ] && timeout 1 sh -c 'printf "%s\n" "$1" > '$UI'/ctl' _ "$1"
+}
+
+do_row() {
+  case "$1" in
+    "Screen off")            ctl "screen off" || { echo "vegas-menu: vegas-keys is not running" >&2; return 1; } ;;
+    "Rotate")                if [ "$(rotation)" = normal ]; then to=$(cat $UI/rotation-last 2>/dev/null || echo 90); else to=normal; fi
+                             /usr/local/sbin/vegas-rotate "$to" ;;
+    "Reboot to Android")     sync; systemctl reboot ;;
+    "Reboot to rescue root") /usr/local/sbin/reboot-rescue ;;
+    "Power off now")         sync; systemctl poweroff ;;     # [UNVERIFIED with sway alive, Q4]
+    "Restart terminal")      pid=$(cat $UI/term.pid 2>/dev/null)
+                             [ -n "$pid" ] && [ "$(cat /proc/$pid/comm 2>/dev/null)" = foot ] && kill "$pid" ;;
+    "Close program")         swaymsg -q '[workspace=2] kill'; swaymsg -q 'workspace number 1' ;;
+    "Home")                  swaymsg -q 'workspace number 1'; tmux select-window -t main:0 ;;
+    *)                       echo "vegas-menu: unknown row: $1" >&2; return 2 ;;
+  esac
+}
+
+# -s: rows start at the left edge (by default bemenu indents them by the prompt's width, which pushed them off a
+# 360-wide screen); --cw 1 --ch 1: the (unused) filter field's text cursor shrinks to a dot; prompt <= 27 chars at 15 pt
+pick() {  # $1 = prompt, $2 = line height, rest = rows; prints the row, fails on cancel or anything not in the list
+  local prompt=$1 h=$2 sel; shift 2
+  sel=$(printf '%s\n' "$@" | BEMENU_BACKEND=wayland bemenu -l "$#" -b -W 1.0 -H "$h" -p "$prompt" -s --cw 1 --ch 1 \
+        --fn 'JetBrains Mono 15' --tb '#0F151C' --tf '#F0B429' --fb '#0F151C' --ff '#D5DBE3' \
+        --nb '#0F151C' --nf '#D5DBE3' --ab '#0F151C' --af '#D5DBE3' --hb '#F0B429' --hf '#1C1400' \
+        --sb '#F0B429' --sf '#1C1400') || return 1
+  local r; for r in "$@"; do [ "$sel" = "$r" ] && { printf '%s\n' "$sel"; return 0; }; done
+  return 1   # typed text that matches no row = cancel
+}
+
+if [ "${1:-}" = --do ]; then do_row "${2:-}"; exit; fi
+run=0; [ "${1:-}" = --run ] && { run=1; shift; }
+variant=${1:-full} orient=${2:-auto}
+[ "$orient" = auto ] && case $(rotation) in 90|270) orient=landscape ;; *) orient=upright ;; esac
+h=50; [ "$orient" = landscape ] && h=36          # rows 150 px upright, 108 px landscape (planned, unmeasured)
+case $variant in
+  full)      rows=("Screen off" "Rotate" "Reboot to Android" "Reboot to rescue root" "Power off" "Restart terminal" "Home" "Cancel") ;;
+  full-prog) rows=("Screen off" "Rotate" "Reboot to Android" "Reboot to rescue root" "Power off" "Close program" "Home" "Cancel") ;;
+  short)     rows=("Screen off" "Reboot to Android" "Power off" "Cancel") ;;   # Away, PIN not entered
+  *) echo "usage: vegas-menu [--run] [full|full-prog|short] [upright|landscape|auto] | --do <row>" >&2; exit 2 ;;
+esac
+command -v bemenu >/dev/null || { echo "vegas-menu: bemenu is not installed" >&2; exit 1; }
+row=$(pick 'Vol keys move · Power picks' $h "${rows[@]}") || exit 1
+[ "$row" = Cancel ] && exit 1
+if [ "$row" = "Power off" ]; then
+  # Confirm list: rows "Power off now" and "Cancel". With a charger present (designer ruling 2, 23 Nov) the warning
+  # "Cable in: charges to full" (25 characters, fits 360 px at 15 pt like the 27-character main prompt) is the
+  # prompt line itself, in amber (--tf), instead of a third row.
+  prompt='Power off the phone?'
+  [ "$(cat ${VEGAS_SYSROOT:-}/sys/class/power_supply/primary_chg/online 2>/dev/null)" = 1 ] && prompt='Cable in: charges to full'
+  row=$(pick "$prompt" $h "Power off now" "Cancel") || exit 1
+  [ "$row" = "Power off now" ] || exit 1
+fi
+printf '%s\n' "$row"
+[ $run = 1 ] && { do_row "$row"; exit; }
+exit 0

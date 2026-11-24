@@ -1,0 +1,4 @@
+# Full partition dumps live here as compressed archives — never commit them (multi-GB, device-unique).
+*
+!.gitignore
+!README.md

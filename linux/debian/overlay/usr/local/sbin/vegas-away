@@ -1,0 +1,159 @@
+#!/bin/bash
+# Away switch (D17, Q29 own touch pad, Q31 SSH closed on Wi-Fi): vegas-away on|off|status|apply|setpin|checkpin
+# Away on = /etc/vegas/away exists (survives reboot). Effects elsewhere: vegas-keys shows the PIN pad after the glance
+# and only the short power menu until the PIN is entered; the strip and glance show AWAY. Here: SSH (tcp/22) is closed
+# on every interface except lo, usb0 (the cable is the farm's management link) and wg+ (VPN), with iptables-legacy
+# (this kernel has no nf_tables) in an own chain VEGAS-AWAY hooked first in INPUT. Idempotent.
+# vegas-away.service re-applies it at boot (before the network and sshd) when Away is on.
+# Property (designer B1, 23 Nov): with Away on, port 22 is unreachable over Wi-Fi on IPv4 AND IPv6, or Away says it
+# is not on. sshd listens on every interface, so:
+#   IPv4: the iptables-legacy rule, or `on` refuses (Away stays off) and `apply` fails the boot unit.
+#   IPv6: the ip6tables-legacy rule (the phone kernel has IP6_NF_FILTER=y). If that cannot be applied, IPv6 is
+#         switched off instead while Away is on: disable_ipv6=1 on every interface but lo/usb0/wg* and on "default"
+#         (wlan0 comes up after this unit at boot; the hotspot's ap0 later), plus a /run networkd drop-in for wlan0
+#         (LinkLocalAddressing=no, IPv6AcceptRA=no), because networkd sets disable_ipv6=0 again on every
+#         reconfigure of a link whose .network asks for IPv6 (DHCP=yes; VM, systemd 257). The old values are kept in
+#         /run/vegas-away.ipv6off and put back by `off`. If neither holds, `on` refuses like IPv4.
+#   status says "SSH closed on Wi-Fi" only when both families are closed right now (read live, never assumed).
+#   on        needs a PIN (setpin first); off: no PIN asked here (a root shell is already trusted; Home asks first)
+#   setpin    new 4..6 digit PIN, typed twice (stdin: two lines)   checkpin  PIN on stdin; 0 right, 1 wrong, 3 locked
+# Limits (say so in the UI): guards the running phone, not the disk; weaker than a real lock.
+#   /run/vegas-ui/away-ssh: "closed" or "open" as last found by on/off/apply/status (no fork for the strip/Home)
+# Test hook: VEGAS_SYSROOT prefixes /etc/vegas/away, the /run state and the networkd drop-in (sysctl stays the real
+# /proc/sys of the caller's network namespace, so tests run in their own netns).
+set -Eeuo pipefail
+SR=${VEGAS_SYSROOT:-}
+A=$SR/etc/vegas/away
+UI=$SR/run/vegas-ui
+SSHSTATE=$SR/run/vegas-ui/away-ssh
+V6OFF=$SR/run/vegas-away.ipv6off
+DROPIN=$SR/run/systemd/network/20-wlan0.network.d/vegas-away.conf
+C6=/proc/sys/net/ipv6/conf
+pin() { PYTHONPATH=${VEGAS_UI_LIB:-/usr/lib/vegas/ui} python3 -m vegasui.pin "$@"; }
+# a tool counts only when the kernel has its table (a missing ip6_tables would otherwise stop `on` half-way, set -e)
+usable() { command -v "$1" >/dev/null && "$1" -w -n -L INPUT >/dev/null 2>&1; }
+tools() { local t; for t in iptables-legacy ip6tables-legacy; do usable $t && echo $t; done; return 0; }
+exempt() { case $1 in lo|usb0|wg*) return 0 ;; esac; return 1; }
+
+rules_on() {
+  local ipt
+  for ipt in $(tools); do
+    {
+      $ipt -N VEGAS-AWAY 2>/dev/null || $ipt -F VEGAS-AWAY
+      $ipt -A VEGAS-AWAY -i lo -j RETURN
+      $ipt -A VEGAS-AWAY -i usb0 -j RETURN
+      $ipt -A VEGAS-AWAY -i wg+ -j RETURN
+      $ipt -A VEGAS-AWAY -p tcp --dport 22 -j DROP
+      $ipt -C INPUT -p tcp --dport 22 -j VEGAS-AWAY 2>/dev/null || $ipt -I INPUT -p tcp --dport 22 -j VEGAS-AWAY
+    } || echo "vegas-away: $ipt rules failed" >&2      # judged by v4_closed/v6_closed below, not by set -e
+  done
+  v6_rule || ipv6_off
+}
+rules_off() {
+  local ipt
+  for ipt in iptables-legacy ip6tables-legacy; do
+    command -v $ipt >/dev/null || continue
+    while $ipt -D INPUT -p tcp --dport 22 -j VEGAS-AWAY 2>/dev/null; do :; done
+    $ipt -F VEGAS-AWAY 2>/dev/null || true; $ipt -X VEGAS-AWAY 2>/dev/null || true
+  done
+  ipv6_restore
+}
+v4_closed() { iptables-legacy -C INPUT -p tcp --dport 22 -j VEGAS-AWAY 2>/dev/null && iptables-legacy -C VEGAS-AWAY -p tcp --dport 22 -j DROP 2>/dev/null; }
+v6_rule() {
+  command -v ip6tables-legacy >/dev/null || return 1
+  ip6tables-legacy -C INPUT -p tcp --dport 22 -j VEGAS-AWAY 2>/dev/null && ip6tables-legacy -C VEGAS-AWAY -p tcp --dport 22 -j DROP 2>/dev/null
+}
+# IPv6 off on every interface that is not exempt, and on "default" (interfaces made later)
+v6_disabled() {
+  local d n
+  [ "$(cat $C6/default/disable_ipv6 2>/dev/null)" = 1 ] || return 1
+  for d in $C6/*/; do
+    n=$(basename "$d"); case $n in all|default) continue ;; esac
+    exempt "$n" && continue
+    [ "$(cat "$d/disable_ipv6" 2>/dev/null)" = 1 ] || return 1
+  done
+}
+v6_closed() { [ ! -d $C6 ] || v6_rule || v6_disabled; }   # no IPv6 in the kernel: nothing to close
+ipv6_off() {
+  [ -d $C6 ] || return 0
+  local d n
+  if [ ! -e "$V6OFF" ]; then                      # keep the values from before Away, once
+    mkdir -p "$(dirname "$V6OFF")"
+    for d in $C6/*/; do
+      n=$(basename "$d"); case $n in all) continue ;; esac
+      exempt "$n" && continue
+      echo "$n $(cat "$d/disable_ipv6" 2>/dev/null || echo 0)"
+    done > "$V6OFF.new" && mv -f "$V6OFF.new" "$V6OFF"
+  fi
+  mkdir -p "$(dirname "$DROPIN")"
+  printf '# vegas-away (until Away off or reboot): no IPv6 on Wi-Fi while ip6tables cannot close SSH\n[Network]\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n' > "$DROPIN"
+  echo 1 2>/dev/null > $C6/default/disable_ipv6 || true
+  for d in $C6/*/; do
+    n=$(basename "$d"); case $n in all|default) continue ;; esac
+    exempt "$n" || echo 1 2>/dev/null > "$d/disable_ipv6" || true
+  done
+  nd reload    # networkd keeps it off from now on (at boot it is not running yet and reads the drop-in at start)
+  if v6_disabled; then echo "vegas-away: ip6tables-legacy unusable: IPv6 switched off on Wi-Fi while Away is on" >&2
+  else echo "vegas-away: ip6tables-legacy unusable and IPv6 could not be switched off" >&2; fi
+}
+ipv6_restore() {
+  local had=0 n v d d0
+  [ -e "$DROPIN" ] && { rm -f "$DROPIN"; rmdir "$(dirname "$DROPIN")" 2>/dev/null || true; had=1; }
+  if [ -e "$V6OFF" ]; then
+    had=1
+    while read -r n v; do
+      case $n in ""|*/*|.|..) continue ;; esac; case $v in 0|1) ;; *) continue ;; esac
+      [ -e "$C6/$n/disable_ipv6" ] && echo "$v" 2>/dev/null > "$C6/$n/disable_ipv6" || true
+    done < "$V6OFF"
+    # interfaces made while Away was on (wlan0 after a boot, the hotspot's ap0) were born with IPv6 off: give them
+    # the old default
+    d0=$(sed -n 's/^default \([01]\)$/\1/p' "$V6OFF"); d0=${d0:-0}
+    for d in $C6/*/; do
+      n=$(basename "$d"); case $n in all|default) continue ;; esac
+      exempt "$n" || awk -v n="$n" '$1 == n {f = 1} END {exit !f}' "$V6OFF" || echo "$d0" 2>/dev/null > "$d/disable_ipv6" || true
+    done
+    rm -f "$V6OFF"
+  fi
+  if [ $had = 1 ] && [ -z "$SR" ]; then          # networkd gives wlan0 its IPv6 back
+    nd reload; [ -e /sys/class/net/wlan0 ] && nd reconfigure wlan0
+  fi
+  return 0
+}
+closed() { v4_closed && v6_closed; }
+# networkctl only while networkd runs (the boot unit runs before D-Bus and networkd: never wait on them there)
+nd() { [ -z "$SR" ] && systemctl is-active -q systemd-networkd 2>/dev/null && timeout 10 networkctl "$@" >/dev/null 2>&1; return 0; }
+note() {   # $1 closed|open for the strip/Home/glance (they never fork for it)
+  mkdir -p -m 700 "$(dirname "$SSHSTATE")" 2>/dev/null && echo "$1" > "$SSHSTATE.new" && mv -f "$SSHSTATE.new" "$SSHSTATE" || true
+}
+tell() { [ -p $UI/ctl ] && timeout 1 sh -c "echo 'away changed' > $UI/ctl" 2>/dev/null || true; }
+
+case "${1:-}" in
+  on)       pin status | grep -q '^set' || { echo "vegas-away: no PIN yet: run 'vegas-away setpin' first" >&2; exit 1; }
+            command -v iptables-legacy >/dev/null || { echo "vegas-away: needs iptables-legacy" >&2; exit 1; }
+            rules_on
+            if ! v4_closed; then rules_off; echo "vegas-away: the IPv4 rules did not apply; Away stays off" >&2; exit 1; fi
+            if ! v6_closed; then rules_off; echo "vegas-away: SSH over IPv6 could not be closed; Away stays off" >&2; exit 1; fi
+            mkdir -p "$(dirname "$A")"; : > "$A"; note closed; sync; tell
+            if v6_rule || [ ! -d $C6 ]; then echo "away on: SSH closed except on USB and VPN; PIN pad after the glance"
+            else echo "away on: SSH closed except USB/VPN; IPv6 off on Wi-Fi"; fi ;;
+  off)      rm -f "$A"; rules_off; note open; sync; tell; echo "away off" ;;
+  apply)    if [ -e "$A" ]; then
+              rules_on
+              closed || { note open; echo "vegas-away: Away is on but SSH could not be closed on Wi-Fi (IPv4 $(v4_closed && echo closed || echo OPEN), IPv6 $(v6_closed && echo closed || echo OPEN))" >&2; exit 1; }
+              note closed; echo "away on: rules applied"
+            else rules_off; note open; fi ;;
+  status)   if [ -e "$A" ]; then s=on; else s=off; fi
+            c4=0 c6=0; v4_closed && c4=1; v6_closed && c6=1
+            if [ $c4$c6 = 11 ]; then r="SSH closed on Wi-Fi"; note closed; [ -e "$V6OFF" ] && ! v6_rule && r="$r, IPv6 off"
+            else note open
+              case $s$c4$c6 in on10) r="SSH OPEN on Wi-Fi over IPv6" ;; on01) r="SSH OPEN on Wi-Fi over IPv4" ;; *) r="SSH open" ;; esac
+            fi
+            echo "$s ($r; PIN $(pin status))" ;;
+  setpin)   if [ -t 0 ]; then
+              read -rsp "new PIN (4-6 digits): " p1; echo; read -rsp "again: " p2; echo
+              printf '%s\n%s\n' "$p1" "$p2" | pin set
+            else pin set; fi
+            echo "PIN set" ;;
+  checkpin) if [ -t 0 ]; then read -rsp "PIN: " p; echo; printf '%s\n' "$p" | pin check; else pin check; fi ;;
+  *) echo "usage: vegas-away on|off|status|apply|setpin|checkpin" >&2; exit 2 ;;
+esac

@@ -1,0 +1,6 @@
+id=hide_apps
+name=Hide protected preloads
+version=v1
+versionCode=1
+author=gpower26-cluster-pub
+description=At post-fs-data (before PackageManager scans), bind-mount an empty dir over each app dir in hidden.list, so protected preloads that refuse pm disable/uninstall are simply not installed. Remove the module + reboot to bring them back.

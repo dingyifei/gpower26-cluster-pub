@@ -1,0 +1,58 @@
+#!/bin/bash
+# Bring up the MT6835 connsys Wi-Fi the way Android's init does, without Android (vegas-wifi.service):
+#   connsys modules -> wmt_loader -> wmt_launcher -> wmt_chrdev_wifi + wlan_drv_gen4m_6835 -> wlan_assistant
+#   (pushes the WIFI NVRAM COPY from /mnt/vendor/nvdata on Debian's root) -> "1" > /dev/wmtWifi -> wlan0, MAC from
+#   bootconfig. Stops (and the unit fails) if the modem comes up (ccmni*) or an NV partition is mounted.
+# wmt_drv needs ccci symbols (ccci_md_all, ccmni): loading them does not boot the modem (Android's ccci_mdinit does).
+set -Eeuo pipefail
+say() { echo "vegas-wifi: $*"; }
+die() { say "STOP: $*"; exit 1; }
+cleanup() {  # any failed exit (die, set -e, systemd's timeout SIGTERM): radio off, vendor daemons stopped
+  local rc=$?; [ "$rc" -eq 0 ] && return 0
+  say "failed (exit $rc): Wi-Fi off, wmt/wlan daemons stopped"
+  [ -c /dev/wmtWifi ] && { echo 0 > /dev/wmtWifi; } 2>/dev/null || true
+  systemctl stop --no-block vegas-wlan-assistant.service vegas-wmt-launcher.service 2>/dev/null || true
+}
+trap cleanup EXIT; trap 'exit 143' TERM
+modem_check() {   # buffer first: `cmd | grep -q` fails open under pipefail (SIGPIPE on the writer)
+  local links log
+  links=$(ip -o link show 2>/dev/null || true); log=$(dmesg 2>/dev/null || true)
+  if grep -E 'ccmni[0-9]+:.*[<,]UP[,>]' <<<"$links"; then die "a modem interface (ccmni) is UP"; fi
+  if grep -iE 'md1.*(boot|ready).*(done|success)|MD_STATE.*READY' <<<"$log" | tail -3; then die "modem boot seen in dmesg"; fi
+  return 0
+}
+/usr/lib/vegas/nvguard || die "nvguard"
+[ -s /mnt/vendor/nvdata/APCFG/APRDEB/WIFI ] || die "no WIFI NVRAM copy in /mnt/vendor/nvdata/APCFG/APRDEB"
+echo -n /vendor/firmware > /sys/module/firmware_class/parameters/path
+for m in connadp connfem btif_drv wmt_drv; do say "modprobe $m"; modprobe "$m"; modem_check; done
+say "wmt_loader"; timeout 90 /vendor/bin/wmt_loader || say "wmt_loader exited $?"
+modem_check
+systemctl start vegas-wmt-launcher.service; sleep 3; modem_check
+for m in wmt_chrdev_wifi wlan_drv_gen4m_6835; do say "modprobe $m"; modprobe "$m"; modem_check; done
+systemctl start vegas-wlan-assistant.service
+for i in $(seq 1 30); do [ -c /dev/wmtWifi ] && break; sleep 1; done
+[ -c /dev/wmtWifi ] || die "no /dev/wmtWifi"
+sleep 3   # wlan_assistant pushes the NVRAM first
+say "power on (1 > /dev/wmtWifi)"; echo 1 > /dev/wmtWifi
+for i in $(seq 1 30); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
+[ -e /sys/class/net/wlan0 ] || die "no wlan0"
+mac=$(sed -n 's/^androidboot.wifimacaddr = "\([^"]*\)".*/\1/p' /proc/bootconfig | head -1)
+if [ -n "$mac" ]; then ip link set wlan0 down; ip link set wlan0 address "${mac,,}"; fi
+ip link set wlan0 up
+modem_check
+say "wlan0 up, MAC $(cat /sys/class/net/wlan0/address)"
+# wpa_supplicant@wlan0 is not enabled at boot (it would order network.target and sshd behind this script).
+# A base conf (control socket, update_config=1, no networks) always exists, so wpa_cli can add and SAVE networks from
+# the phone; it is created here, not shipped in the overlay (deb-update would overwrite the phone's saved networks).
+WC=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+# Wi-Fi is up at this point: nothing below may fail the script (the EXIT trap would turn the radio off again).
+if [ ! -s "$WC" ]; then   # no-clobber: ln fails if wifi-conf.sh wrote the file meanwhile
+  if (set +e; umask 077; mkdir -p "${WC%/*}" && printf 'ctrl_interface=DIR=/run/wpa_supplicant GROUP=root\nupdate_config=1\n' > "$WC.new" &&
+      { ln "$WC.new" "$WC" 2>/dev/null || [ -s "$WC" ]; }; rc=$?; rm -f "$WC.new"; exit $rc); then
+    say "base $WC in place (add networks: linux/tools/wifi-conf.sh <SSID> from the Mac, or wpa_cli on the phone)"
+  else say "could not create $WC: Wi-Fi stays up without wpa_supplicant"; fi
+fi
+if [ -s "$WC" ]; then
+  systemctl start --no-block wpa_supplicant@wlan0.service || say "could not queue wpa_supplicant@wlan0 (Wi-Fi stays up)"
+fi
+exit 0

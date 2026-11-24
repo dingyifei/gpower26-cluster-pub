@@ -1,0 +1,6 @@
+# Third-party locked-flash binaries: route-C/D files (USCardForum topic 547067) + the topic-548192 downgrade set
+# (lk-rollback/lk-no-avb/md1img-unlock-3-3 + the base RETUS firmware zip). Large / third-party — never commit. See README.md.
+*
+!.gitignore
+!README.md
+!SHA256SUMS

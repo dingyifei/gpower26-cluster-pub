@@ -1,0 +1,59 @@
+#!/bin/bash
+# One pass of the battery guard (vegas-chargeguard.timer, every 60 s). Logs to the journal only on changes.
+#   stop charging at >= STOP %, resume at <= RESUME %; stop at >= TSTOP degC; power off at >= TOFF degC, or at
+#   <= SOCOFF % while discharging. No valid SOC -> charging off (if a control works) and a warning.
+# Controls (CONTROL=auto picks the first present):
+#   cmd  : /proc/mtk_battery_cmd/current_cmd  "0 1" = charging off, "0 0" = on (stopped charging on phone #1)
+#   qpnp : Moto's qpnp_adaptive_charge module limits (upper_limit/lower_limit), the module keeps the band itself
+# Never touches set_cv, en_power_path or any NV partition.
+set -u
+STOP=80 RESUME=70 TSTOP=42 TRESUME=40 TOFF=55 SOCOFF=5 CONTROL=auto
+[ -r /etc/vegas/chargeguard.conf ] && . /etc/vegas/chargeguard.conf
+B=${VEGAS_BAT:-/sys/class/power_supply/battery} CMD=${VEGAS_CMD:-/proc/mtk_battery_cmd/current_cmd} Q=${VEGAS_QPNP:-/sys/module/qpnp_adaptive_charge/parameters}
+ST=${VEGAS_ST:-/run/vegas-chargeguard}; mkdir -p "$ST"
+say() { local k=$1; shift; [ "$(cat "$ST/$k" 2>/dev/null)" = "$*" ] || { echo "$*"; echo "$*" > "$ST/$k"; }; }
+# Runtime override (the UI's "charge to full" switch): $ST/override with STOP=<n> and RESUME=<n> lines, e.g.
+# STOP=100 RESUME=99. In /run, so it ends at the next reboot. Parsed, not sourced: only these two keys, 50..100,
+# RESUME < STOP; anything else ignores the whole file. Temperature and power-off limits are never overridable.
+if [ -r "$ST/override" ]; then
+  o_stop=$(sed -n 's/^STOP=\([0-9]\{1,3\}\)[[:space:]]*$/\1/p' "$ST/override" | tail -1)
+  o_res=$(sed -n 's/^RESUME=\([0-9]\{1,3\}\)[[:space:]]*$/\1/p' "$ST/override" | tail -1)
+  [ -n "$o_stop" ] && o_stop=$((10#$o_stop)); [ -n "$o_res" ] && o_res=$((10#$o_res))   # "080" is 80, not octal
+  if [ -n "$o_stop" ] && [ -n "$o_res" ] && (( o_stop >= 50 && o_stop <= 100 && o_res >= 50 && o_res < o_stop )); then
+    STOP=$o_stop RESUME=$o_res; say override-state "override: STOP=$STOP RESUME=$RESUME (from $ST/override)"
+  else say override-state "WARNING: ignoring $ST/override (need STOP= and RESUME=, 50..100, RESUME < STOP)"; fi
+else say override-state "override: none"; fi
+
+soc=$(cat $B/capacity 2>/dev/null); t10=$(cat $B/temp 2>/dev/null); status=$(cat $B/status 2>/dev/null)
+[[ "$soc" =~ ^[0-9]+$ ]] && (( soc <= 100 )) && socok=1 || socok=0
+[[ "$t10" =~ ^-?[0-9]+$ ]] && t=$((t10 / 10)) || t=""
+
+if [ "$CONTROL" = auto ]; then
+  if [ -w "$CMD" ]; then CONTROL=cmd; elif [ -w "$Q/upper_limit" ]; then CONTROL=qpnp; else CONTROL=none; fi
+fi
+say control "control: $CONTROL"
+
+# ---- power off ----
+if [ -n "$t" ] && (( t >= TOFF )); then echo "battery ${t} degC >= $TOFF: power off"; systemctl poweroff; exit 0; fi
+# only when really draining: "Not charging" can be the guard's own doing while a charger is plugged in
+if (( socok )) && (( soc <= SOCOFF )) && [ "$status" = Discharging ]; then echo "SOC $soc% <= $SOCOFF% and discharging: power off"; systemctl poweroff; exit 0; fi
+[ -n "$t" ] || say temp "WARNING: no battery temperature"
+
+# ---- charging on/off ----
+want=$(cat "$ST/want" 2>/dev/null || echo on); why=""
+if (( ! socok )); then want=off; why="no valid SOC (capacity='$soc'; is vegas-fuelgauged running?)"
+elif [ -n "$t" ] && (( t >= TSTOP )); then want=off; why="battery ${t} degC >= $TSTOP"
+elif (( soc >= STOP )); then want=off; why="SOC $soc% >= $STOP%"
+elif (( soc <= RESUME )) && { [ -z "$t" ] || (( t < TRESUME )); }; then want=on; why="SOC $soc% <= $RESUME%"
+fi
+echo "$want" > "$ST/want"
+case "$CONTROL" in
+  cmd)  if [ "$want" = off ]; then echo "0 1" > "$CMD"; else echo "0 0" > "$CMD"; fi ;;
+  qpnp) echo "$STOP" > "$Q/upper_limit"; echo "$RESUME" > "$Q/lower_limit"
+        if [ "$want" = off ] && { (( ! socok )) || { [ -n "$t" ] && (( t >= TSTOP )); }; }; then
+          say qpnp "WARNING: qpnp control only keeps the $RESUME-$STOP% band; it cannot stop charging for: $why"
+        fi ;;
+  none) [ "$want" = off ] && say none "WARNING: charging should be off ($why) but no charge control works" ;;
+esac
+say state "charging $want${why:+ ($why)}; SOC ${soc:-?}% ${t:-?} degC $status"
+exit 0

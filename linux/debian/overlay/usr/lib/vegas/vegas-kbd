@@ -1,0 +1,55 @@
+#!/bin/sh
+# On-screen keyboard (spec 6.1/6.2, 5.9).
+#   vegas-kbd                      the keyboard loop, started once by the sway config (exec choom -n 0 -- vegas-kbd)
+#   vegas-kbd show|hide|toggle     the person's choice (strip kbd tap, bottom-edge swipe, Hide key): sets the keyboard
+#                                  and /run/vegas-ui/kbd-user, which a shell window restores
+#   vegas-kbd window N | auto      the rule for tmux window N / the window in front: Home (0) and Network (1) keep the
+#                                  keyboard down unless one of their text fields has focus (tmux-vegas.conf's hook)
+#   vegas-kbd field-on|field-off home|net   (the pages call vegasui.uictl in-process; this is for tests and shells)
+# The verbs are vegasui.uictl's kbd() (one implementation, flock'ed); they print nothing on success.
+#
+# The loop runs the stock wvkbd-mobintl 0.15 with the flags verified on #5 (keyboard v1, the default). Keyboard v2
+# (wvkbd-vegas, our wvkbd 0.21 build: linux/ui-src/wvkbd) is opt-in: it runs only when /etc/vegas/kbd-v2 exists AND
+# wvkbd-vegas is installed (`touch /etc/vegas/kbd-v2; pkill -x wvkbd-mobintl` switches at once, rm + pkill -x
+# wvkbd-vegas goes back). Restarts the keyboard if it exits, so killing it is a safe reset.
+# Show/hide stays manual (never --auto): SIGUSR2 shows, SIGUSR1 hides (pkill -x 'wvkbd-(vegas|mobintl)'); the state
+# is recorded in /run/vegas-ui/kbd (wvkbd has no state query). A keyboard started while that file says hidden starts
+# hidden (--hidden); otherwise it starts shown.
+#
+# Stock keyboard in landscape (designer ruling 5, 23 Nov): on #5 wvkbd-mobintl found its landscape layer by itself
+# (13 terminal rows at 132 columns), so by default nothing restarts it on rotation and it always gets the upright -H.
+# Only if #5 shows it keeping the upright height after `vegas-rotate 90`:
+#   touch /etc/vegas/kbd-landscape-restart; pkill -x wvkbd-mobintl
+# then this loop starts it with -H 144 (432 px, the page's 40 % of 1080) while the rotation file says 90/270, and
+# vegas-rotate kills it after each rotation so it comes back at the new height. `rm` the file to go back.
+# v2 sizes [BUILDER CHOICE]: -H 255 (765 px, the page's 764 px), -L 150 landscape (450 px). No --fn: it would
+# replace the two fonts of config.vegas.h with one.
+# Never touches sway (D10).
+UI=/run/vegas-ui
+case ${1:-} in
+  "") ;;
+  show|hide|toggle|auto|window|field-on|field-off)
+    PYTHONPATH=${VEGAS_UI_LIB:-/usr/lib/vegas/ui} exec python3 -m vegasui.uictl kbd "$@" ;;
+  *) echo "usage: vegas-kbd [show|hide|toggle|auto|window N|field-on APP|field-off APP]" >&2; exit 2 ;;
+esac
+mkdir -p -m 700 $UI
+# If wvkbd-vegas dies at start-up 3 times in a row (bad build, missing lib), run the stock wvkbd-mobintl instead so
+# the phone is never left without a keyboard; v2 is tried again after any keyboard run that lasted >= 5 s.
+fast=0; v2=1
+while :; do
+  if [ $v2 = 1 ] && [ -e "${VEGAS_KBD_V2:-/etc/vegas/kbd-v2}" ] && command -v wvkbd-vegas >/dev/null; then
+    set -- wvkbd-vegas -H 255 -L 150
+  else
+    set -- wvkbd-mobintl -H 250 --fn "Sans 10"
+    if [ -e "${VEGAS_KBD_LANDSCAPE_RESTART:-/etc/vegas/kbd-landscape-restart}" ]; then
+      case $(cat $UI/rotation 2>/dev/null) in 90|270) set -- wvkbd-mobintl -H 144 --fn "Sans 10" ;; esac
+    fi
+  fi
+  # a restart (rotation, crash) keeps the shown/hidden state the strip shows; a fresh boot starts shown
+  if [ "$(cat $UI/kbd 2>/dev/null)" = hidden ]; then set -- "$@" --hidden; else echo shown > $UI/kbd; fi
+  start=$(cut -d. -f1 /proc/uptime)
+  "$@"
+  if [ $(( $(cut -d. -f1 /proc/uptime) - start )) -lt 5 ]; then fast=$((fast + 1)); else fast=0; v2=1; fi
+  if [ $fast -ge 3 ] && [ "$1" = wvkbd-vegas ]; then v2=0; fast=0; echo "vegas-kbd: wvkbd-vegas keeps failing, using wvkbd-mobintl" >&2; fi
+  if [ $fast -ge 5 ]; then sleep 5; else sleep 1; fi
+done

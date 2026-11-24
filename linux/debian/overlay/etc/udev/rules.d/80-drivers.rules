@@ -1,0 +1,1 @@
+# Empty on purpose: no modalias autoload. The vendor modules are loaded explicitly by vegas-modules.service.

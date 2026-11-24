@@ -1,0 +1,12 @@
+[Unit]
+Description=Grow the main root ext4 to the size of its vegasdisk (after datadisk-grow added pieces in Android)
+ConditionPathExists=/dev/mapper/vegas-disk
+After=local-fs.target
+
+[Service]
+Type=oneshot
+# online grow of the mounted root; "Nothing to do" when it already fills the disk
+ExecStart=/sbin/resize2fs /dev/mapper/vegas-disk
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# Clears init.linux's boot-failure counter (/var/lib/vegas/bootfail on the main root) once Debian reaches
+# multi-user.target. init.linux adds 1 before each main-root boot; at 2 uncleared attempts it boots the rescue root
+# once instead. Harmless on the rescue root (no counter file there).
+[Unit]
+Description=vegas: main root came up (clear the boot-failure counter)
+After=multi-user.target
+ConditionPathExists=/var/lib/vegas/bootfail
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo 0 > /var/lib/vegas/bootfail && sync /var/lib/vegas/bootfail'
+
+[Install]
+WantedBy=multi-user.target

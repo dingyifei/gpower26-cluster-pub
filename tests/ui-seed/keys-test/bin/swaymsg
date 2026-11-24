@@ -1,0 +1,7 @@
+#!/bin/sh
+[ -e "$VEGAS_SYSROOT/hang" ] && exec sleep 30
+echo "swaymsg $*" >> "$VEGAS_SYSROOT/cmds"
+case "$*" in
+  *get_tree*) if [ -e "$VEGAS_SYSROOT/glance-mapped" ]; then echo '{"nodes":[{"nodes":[],"floating_nodes":[{"app_id":"vegas-glance","nodes":[]}]}]}'; else echo '{"nodes":[]}'; fi ;;
+  *get_workspaces*) echo "[{\"num\": $(cat $VEGAS_SYSROOT/ws 2>/dev/null || echo 1), \"focused\": true}]" ;;
+esac
