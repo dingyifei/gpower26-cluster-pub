@@ -19,6 +19,7 @@
 #   setpin    new 4..6 digit PIN, typed twice (stdin: two lines)   checkpin  PIN on stdin; 0 right, 1 wrong, 3 locked
 # Limits (say so in the UI): guards the running phone, not the disk; weaker than a real lock.
 #   /run/vegas-ui/away-ssh: "closed" or "open" as last found by on/off/apply/status (no fork for the strip/Home)
+#   R13: on/off, and apply/status when they change away-ssh, signal the strip (AWAY / SSH badge at once)
 # Test hook: VEGAS_SYSROOT prefixes /etc/vegas/away, the /run state and the networkd drop-in (sysctl stays the real
 # /proc/sys of the caller's network namespace, so tests run in their own netns).
 set -Eeuo pipefail
@@ -122,10 +123,16 @@ ipv6_restore() {
 closed() { v4_closed && v6_closed; }
 # networkctl only while networkd runs (the boot unit runs before D-Bus and networkd: never wait on them there)
 nd() { [ -z "$SR" ] && systemctl is-active -q systemd-networkd 2>/dev/null && timeout 10 networkctl "$@" >/dev/null 2>&1; return 0; }
-note() {   # $1 closed|open for the strip/Home/glance (they never fork for it)
+# R13: SIGUSR1 to the strip feed (the pid it wrote, only while that pid is still `vegas-status --bar`): the badge now
+strip() { _p=$(cat $UI/strip.pid 2>/dev/null) || return 0; case $_p in ''|*[!0-9]*) return 0 ;; esac
+  _a=" $(tr '\0' ' ' < /proc/$_p/cmdline 2>/dev/null) "   # whole argv words, as uictl.poke_strip: never --bar-once
+  case $_a in *"vegas-status "*) case $_a in *" --bar "*) kill -USR1 "$_p" 2>/dev/null ;; esac ;; esac; return 0; }
+note() {   # $1 closed|open for the strip/Home/glance (they never fork for it); a change wakes the strip (R13)
+  [ "$(cat "$SSHSTATE" 2>/dev/null)" = "$1" ] && return 0
   mkdir -p -m 700 "$(dirname "$SSHSTATE")" 2>/dev/null && echo "$1" > "$SSHSTATE.new" && mv -f "$SSHSTATE.new" "$SSHSTATE" || true
+  strip
 }
-tell() { [ -p $UI/ctl ] && timeout 1 sh -c "echo 'away changed' > $UI/ctl" 2>/dev/null || true; }
+tell() { strip; [ -p $UI/ctl ] && timeout 1 sh -c "echo 'away changed' > $UI/ctl" 2>/dev/null || true; }
 
 case "${1:-}" in
   on)       pin status | grep -q '^set' || { echo "vegas-away: no PIN yet: run 'vegas-away setpin' first" >&2; exit 1; }

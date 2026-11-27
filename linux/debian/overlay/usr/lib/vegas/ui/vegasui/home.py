@@ -14,6 +14,9 @@ three columns: status | brightness, text size, screen | windows, travel/programs
 Rulings of 24 Nov: upright, the spare rows sit between the status rows and BRIGHTNESS (#gap, sized by VegasApp.fit), so
 the buttons are at the bottom and the message line is the last line, at 51, 60, 68 and 72 columns (R2); Away and
 Charge are state buttons, "Charge" / "80 %" on two lines when one does not fit (R4, tui.StateButton).
+Rulings of 25 Nov: R10 one PIN pad: Home has no PIN field; Away off and the first Away on (PIN set twice) ask
+vegas-keys for the large pad and wait for its answer (see the Away section); a dark screen is refused and said so.
+"away changed" reaches vegas-keys once per toggle, from vegas-away (Home no longer sends a second one).
 """
 import json
 
@@ -24,7 +27,7 @@ from textual.widgets import Static
 from . import uictl, uistatus as st
 from . import readers as R
 from .host import P, exists, write_atomic
-from .tui import AskScreen, Button, Scroll, ChoiceScreen, StateButton, StatusRow, VegasApp, notice, styled
+from .tui import Button, Scroll, ChoiceScreen, StateButton, StatusRow, VegasApp, notice, styled
 
 TEXT_SIZES = {"51": "8.25", "60": "7.25", "68": "6.25", "72": "5.75"}   # columns -> foot point size (60 measured)
 ROTATIONS = [("normal", "upright"), ("90", "keys up"), ("270", "keys down")]
@@ -259,7 +262,7 @@ class Home(VegasApp):
             else:
                 self.say(f"Rotate: {res.err.strip() or res.out.strip()}", "warn")
         elif bid == "win-new":
-            uictl.tmux(r, "new-window", "-t", "main")
+            uictl.tmux(r, "new-window", "-t", "main", "-n", "sh")   # R14: -n = automatic-rename off: stays "sh"
         elif bid.startswith("win-"):
             uictl.select_window(r, bid[4:])
         elif bid == "power":
@@ -302,54 +305,107 @@ class Home(VegasApp):
         self.say(msg)
         self.refresh_status()
 
-    # --- Away (spec 5.6, D17, Q29/Q31) ------------------------------------------------------------------------------
+    # --- Away (spec 5.6, D17, Q29/Q31; R10/R11 of 25 Nov) ------------------------------------------------------------
+    # R10: one PIN pad. Home has no PIN field: "Away off" and the first "Away on" (a PIN set by entering it twice) ask
+    # vegas-keys for the large pad (ctl "pin-ask off|set <id>"); the PIN is typed and checked (vegasui.pin, same tries
+    # and waits) or stored there. The answer comes back in /run/vegas-ui/pin-ask ("id=<id> result=... [why=...]"),
+    # seen through the page's inotify watch (tui.pin_ask_changed) and a 0.5 s poll (no inotify; vegas-keys gone).
+    # While waiting the message line says "Enter the PIN on the phone" (also over SSH). ok: Home runs vegas-away
+    # off / on itself; vegas-away tells vegas-keys "away changed" (Home no longer sends it too: one log line).
+    ASK_OPEN_WAIT = 3.0      # s for vegas-keys to put the pad up (answer "open") before Home gives up
+    ASK_GONE_WAIT = 2.0      # s the screen state may be other than "pin" while the pad is open before Home gives up
+    ASK_MSG = {"cancel": "PIN entry cancelled", "timeout": "No PIN entered for 30 s: Away unchanged"}
+    REFUSED = {"dark": "The screen is dark: wake the phone and try again, or use vegas-away in a shell",
+               "busy": "The phone shows a menu or a PIN pad: try again, or use vegas-away in a shell",
+               "nopad": "vegas-keys has no PIN pad here: use vegas-away in a shell",
+               "away-on": "Away is already on",        # Away changed elsewhere (a shell) since Home last read it
+               "away-off": "Away is already off"}
+
+    _asking = None           # the open request: dict(id, purpose, t0, opened, seen_pin)
+    _ask_timer = None
+
     def _away_toggle(self) -> None:
         if not self.runner.which("vegas-away"):
             notice(self, "Away needs vegas-away", "The Away switch (SSH closed on Wi-Fi, PIN pad on wake) is not "
                    "installed on this root yet.")
             return
+        if self._asking:
+            self.say("Enter the PIN on the phone")
+            return
         from . import pin
         if st.away_on():
-            self.push_screen(AskScreen("Away is on. PIN to turn it off", "Turn Away off", password=True,
-                                       digits=True), self._away_off)
+            self._ask_pad("off")
         elif not pin.is_set():
-            self.push_screen(AskScreen("New Away PIN (4 to 6 digits)", "Next", password=True, digits=True,
-                                       check=lambda v: None if pin.valid(v) else "4 to 6 digits"), self._pin_new)
+            self._ask_pad("set")
         else:
             self._away_on()
 
-    def _pin_new(self, first) -> None:
-        if first:
-            self.push_screen(AskScreen("The same PIN again", "Set PIN and turn Away on", password=True, digits=True,
-                                       check=lambda v: None if v == first else "Not the same PIN"),
-                             lambda v: self._pin_set(v))
+    def _ask_pad(self, purpose) -> None:
+        import os
+        import time
+        rid = f"{os.getpid()}-{int(time.time() * 1000)}"
+        if not uictl.send(f"pin-ask {purpose} {rid}"):
+            self.say("The PIN pad needs vegas-keys, which is not running: use vegas-away in a shell", "warn")
+            return
+        self._asking = {"id": rid, "purpose": purpose, "t0": time.monotonic(), "opened": False,
+                        "seen_pin": time.monotonic()}
+        self.say("Enter the PIN on the phone")
+        self._ask_timer = self.set_interval(0.5, self._ask_poll)
 
-    def _pin_set(self, v) -> None:
-        if v:
-            from . import pin
-            pin.set_pin(v)
-            self._away_on()
+    def pin_ask_changed(self) -> None:
+        self._ask_poll()
+
+    def _ask_end(self) -> None:
+        self._asking = None
+        if self._ask_timer is not None:
+            self._ask_timer.stop()
+            self._ask_timer = None
+
+    def _ask_poll(self) -> None:
+        import time
+        a = self._asking
+        if not a:
+            return
+        raw = uictl.ui_read("pin-ask") or ""
+        kv = dict(p.split("=", 1) for p in raw.split() if "=" in p)
+        now = time.monotonic()
+        if kv.get("id") == a["id"]:
+            res = kv.get("result")
+            if res == "open":
+                a["opened"] = True
+            else:
+                self._ask_end()
+                if res == "ok":
+                    self._away_on() if a["purpose"] == "set" else self._away_off()
+                elif res == "refused":
+                    self.say(self.REFUSED.get(kv.get("why"), f"PIN pad refused ({kv.get('why', '?')})"), "warn")
+                    if kv.get("why") in ("away-on", "away-off"):
+                        self.refresh_status()                 # the button then shows what Away really is
+                else:
+                    self.say(self.ASK_MSG.get(res, f"PIN pad: {res}"), "warn" if res != "cancel" else None)
+                return
+        if not a["opened"]:
+            if now - a["t0"] > self.ASK_OPEN_WAIT:
+                self._ask_end()
+                self.say("vegas-keys did not answer: use vegas-away in a shell", "warn")
+            return
+        if uictl.screen_state() == "pin":
+            a["seen_pin"] = now
+        elif now - a["seen_pin"] > self.ASK_GONE_WAIT:      # vegas-keys restarted (or was stopped) with the pad up
+            self._ask_end()
+            self.say("PIN entry ended", "warn")
 
     def _away_on(self) -> None:
-        res = self.runner.run(["vegas-away", "on"], timeout=10)
-        uictl.send("away changed")
+        res = self.runner.run(["vegas-away", "on"], timeout=10)   # it tells vegas-keys "away changed" itself
         # the tool's own line as returned: stdout's first, or (refused) stderr's last, which says why Away stays off
         msg = res.out.strip().splitlines()[0] if res.out.strip() else \
             (res.err.strip().splitlines() or ["Away on"])[-1]
         self.say(msg, None if res.ok and "OPEN" not in msg else "warn")
         self.refresh_status()
 
-    def _away_off(self, v) -> None:
-        if not v:
-            return
-        from . import pin
-        res, secs = pin.check(v)
-        if res != "ok":
-            self.say({"locked": f"Locked: try again in {secs} s", "unset": "No PIN set"}.get(res, "Wrong PIN"),
-                     "warn")
-            return
-        out = self.runner.run(["vegas-away", "off"], timeout=10)
-        uictl.send("away changed")
+    def _away_off(self) -> None:
+        """The right PIN was entered on the pad (vegas-keys checked it)."""
+        out = self.runner.run(["vegas-away", "off"], timeout=10)  # it tells vegas-keys "away changed" itself
         self.say(out.out.strip() or out.err.strip() or "Away off", None if out.ok else "warn")
         self.refresh_status()
 

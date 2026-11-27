@@ -3,7 +3,8 @@
 The UI never writes the backlight: it asks vegas-keys through the FIFO /run/vegas-ui/ctl (one writer, D4). Until
 vegas-keys exists the FIFO has no reader and the request is dropped (ENXIO), which the caller reports.
 Keyboard (designer ruling 8, 23 Nov): the keyboard is hidden while Home (tmux window 0) or Network (1) is in front.
-It comes up there only while a text field has focus (passphrase, PIN, hidden network name) and goes away after.
+It comes up there only while a text field has focus (passphrase, hidden network name; the Away PIN is typed on
+vegas-keys' pad since R10) and goes away after.
 Leaving for a shell window (2 and up) restores what the person last chose. Files in /run/vegas-ui (wvkbd has no
 state query):
   kbd                 shown|hidden, what the keyboard shows now (the strip's badge, vegas-kbd's start state)

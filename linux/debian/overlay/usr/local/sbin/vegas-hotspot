@@ -9,11 +9,23 @@
 # and only while the hotspot is off (the running AP and its QR code keep the old one). It prints "new passphrase set",
 # never the passphrase; `show` prints it. Clients get the uplink's own DNS servers. Forwarding is limited to
 # ap0 <-> wlan0, new connections only outward.
+# Ruling R9 (25 Nov): `on` refuses while wlan0 has no IPv4 address (not connected): it stays off (no unit started),
+# exits 1 and prints exactly $NOUP (Network shows it on its message line). No AP is ever started without a station
+# (an AP with no uplink, then a join on another channel, is a channel move nobody has run on this driver). If the
+# uplink goes while the hotspot is on, it stays on until its timer and `status` ends in ", no uplink" (Network and
+# the glance say "no uplink" in amber).
+# R13: on, off and the teardown (its own time-out included) signal the strip, so the AP badge follows at once.
 # Test hook: VEGAS_HOTSPOT_CONF replaces /etc/vegas/hotspot.conf.
 set -Eeuo pipefail
 export LC_ALL=C   # the conf regexes use byte ranges ([!-~]), which match nothing in e.g. en_US.UTF-8 (VM)
 C=${VEGAS_HOTSPOT_CONF:-/etc/vegas/hotspot.conf} R=/run/vegas-hotspot UNIT=vegas-hotspot IPT=iptables-legacy
 die() { echo "vegas-hotspot: $*" >&2; exit 1; }
+NOUP="Not connected: nothing to share. Join a network first."   # R9, word for word (vegas-usbshare says the same)
+uplink() { [[ $(ip -4 -o addr show dev wlan0 2>/dev/null) == *" inet "* ]]; }   # R9: wlan0 has an IPv4 address
+# R13: SIGUSR1 to the strip feed (the pid it wrote, only while that pid is still `vegas-status --bar`): the badge now
+strip() { _p=$(cat /run/vegas-ui/strip.pid 2>/dev/null) || return 0; case $_p in ''|*[!0-9]*) return 0 ;; esac
+  _a=" $(tr '\0' ' ' < /proc/$_p/cmdline 2>/dev/null) "   # whole argv words, as uictl.poke_strip: never --bar-once
+  case $_a in *"vegas-status "*) case $_a in *" --bar "*) kill -USR1 "$_p" 2>/dev/null ;; esac ;; esac; return 0; }
 # 16 of 55 unambiguous characters (~92 bits); `|| true`: tr ends on SIGPIPE (pipefail), the length is checked
 newpsk() { tr -dc a-km-zA-HJ-NP-Z2-9 </dev/urandom | head -c 16 || true; }
 # write SSID $1 + PSK $2 as a new file via rename (an existing file's loose mode is never reused); printf is a builtin,
@@ -44,7 +56,7 @@ teardown() {
   set +e; [ -n "${UD:-}" ] && kill "$UD" 2>/dev/null
   nat -D; [ -e /run/systemd/network/05-usb0-share.network ] || echo 0 > /proc/sys/net/ipv4/ip_forward
   ip addr flush dev ap0 2>/dev/null; [ -e /sys/class/net/ap0 ] && echo S > /dev/wmtWifi
-  rm -rf $R; echo "hotspot off"
+  rm -rf $R; strip; echo "hotspot off"
 }
 run() {  # the unit's main process: up, hostapd until the time limit or a stop, then down
   local min=$1 f i ch hw extra="" rc
@@ -84,6 +96,7 @@ run() {  # the unit's main process: up, hostapd until the time limit or a stop, 
 case "${1:-status}" in
   on)   [ "$(id -u)" = 0 ] || die "run as root"; systemctl is-active -q $UNIT && die "already on"
         [ -e /sys/class/net/wlan0 ] && [ -c /dev/wmtWifi ] || die "Wi-Fi is not up (vegas-wifi)"
+        uplink || { echo "$NOUP" >&2; exit 1; }    # R9: refuse, stay off
         min=${2:-60}; [[ $min =~ ^[1-9][0-9]{0,2}$ ]] && (( min <= 720 )) || die "minutes: 1..720"
         command -v hostapd >/dev/null || die "needs the hostapd package"
         conf
@@ -92,10 +105,10 @@ case "${1:-status}" in
           hostapd_cli -p $R/ctrl -i ap0 status 2>/dev/null | grep -qx 'state=ENABLED' && break
           systemctl is-active -q $UNIT || break; sleep 1; done
         if hostapd_cli -p $R/ctrl -i ap0 status 2>/dev/null | grep -qx 'state=ENABLED'; then
-          echo "on: $SSID (passphrase: vegas-hotspot show), off in $min min"
+          strip; echo "on: $SSID (passphrase: vegas-hotspot show), off in $min min"
         else systemctl stop $UNIT 2>/dev/null || true
           journalctl -u $UNIT --since "-30s" -o cat --no-pager | grep -vi passphrase | tail -5 >&2; die "the AP did not come up"; fi ;;
-  off)  systemctl stop $UNIT 2>/dev/null || true; echo "hotspot off" ;;
+  off)  systemctl stop $UNIT 2>/dev/null || true; strip; echo "hotspot off" ;;
   run)  [ -n "${2:-}" ] || die "run needs minutes"; run "$2" ;;
   show) conf; printf 'SSID %s\npassphrase %s\n' "$SSID" "$PSK" ;;
   newpass)
@@ -105,7 +118,8 @@ case "${1:-status}" in
         write_conf "$SSID" "$p" || die "cannot write $C"
         echo "new passphrase set" ;;
   status) if systemctl is-active -q $UNIT; then
-            n=$(hostapd_cli -p $R/ctrl -i ap0 list_sta 2>/dev/null | grep -c . || true); conf; echo "on: $SSID, $n device(s)"
+            n=$(hostapd_cli -p $R/ctrl -i ap0 list_sta 2>/dev/null | grep -c . || true); conf
+            echo "on: $SSID, $n device(s)$(uplink || echo ", no uplink")"   # R9: kept on until its timer
           else echo off; fi ;;
   *) echo "usage: vegas-hotspot on [minutes] | off | status | show | newpass" >&2; exit 2 ;;
 esac

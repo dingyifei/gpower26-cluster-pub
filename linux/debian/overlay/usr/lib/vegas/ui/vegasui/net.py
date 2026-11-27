@@ -20,9 +20,59 @@ wpa_supplicant does not answer, never automatically while the Wi-Fi hotspot is o
 tapped Rescan puts a refused request on the message line. Empty list: "No other networks in range" while
 connected, "No networks in range" otherwise (R5). Upright, the in-range list takes the spare rows and scrolls in them,
 so the button groups stay at the bottom when a scan fills it (R2); the Hotspot button is a state button (R4).
+Rulings of 25 Nov: "scanned N min ago" is the age of the list on screen, whoever asked for the scan (R12):
+wpa_supplicant's own scans and wpa_cli's count. The ages come from wpa_supplicant's BSS table (Wpa.bss_ages: one
+age per BSS), read with the status every 10 s refresh and after each of our scans; when the table holds a newer list
+than the one last brought in (an outside scan), it is brought in with its own ages. R3's two-minute test uses the
+same age as the head (a list wpa_supplicant has just refreshed is not scanned again), plus the request time (a
+refused request is not repeated within SCAN_STALE). A wpa_supplicant that does not answer BSS: the age of our own
+last scan, as before.
+Follow-on rulings (after the R8-R16 build):
+F3 (R12 order): between sorts, rows only update in place or get appended (Net._take_list): a network still in range
+keeps its row with new values, one that went away keeps its row drawn "out of range" (no bars), new networks go after
+the rows (beyond SHOWN they wait in "more"), a saved mark changes in place. Rows are sorted by signal (and the
+out-of-range ones dropped) only (a) on Network's own scan (Rescan, the R3 automatic scan, the scan after a
+join/forget; results that land up to OWN_LATE s after our request, when the 3 s wait missed them, count as that scan)
+and (b) each time the Network window comes to the front (Net.resort): tmux window 1 of "main" selected, learnt
+exactly as R3 learns it (uictl's session-window-changed hook writes /run/vegas-ui/kbd-window, the inotify watch on
+/run/vegas-ui calls front_changed; the 10 s refresh re-reads the file as a fallback). "Page shown" is that same
+event (G5 below adds the screen coming back); a dialog of Network's own closing does not re-sort (a finger may be
+lifting off the glass then). The sort happens at the front event itself; a newer list the gather started then brings
+in is sorted as well. A row drawn "out of range" is not joined when tapped (G6 below: a join to a network the last
+scan did not see would fail and drop the Wi-Fi in use, and SSH with it). A list read
+by a gather is re-tested on the UI thread before it is taken (_still_newer): an older list never replaces a newer.
+F4 (R12 age): "scanned N min ago" and R3's 2-minute test use the MEDIAN age of the rows on screen (Net.list_age):
+the rows drawn in the in-range list = the first SHOWN (6), or all of them while "more" is open; a list shorter than
+that counts whole (rows scrolled out of view upright still count). A row's age = time since a scan last saw its
+network's freshest BSS (out-of-range rows keep aging from their last sighting); an even count takes the mean of the
+two middle ages. Empty list: the age of the table as a whole. The associated BSS may always read fresh (to check on
+#5): it alone never pulls a newer list in, but its row's age is its own.
+Second follow-on rulings (G5, G6):
+G5 "Network comes to the front" has ONE definition, used by both R3's two-minute scan test and F3's re-sort
+(Net.came_to_front, the only place either starts from): (a) Network's window (tmux window 1 of "main") is selected
+on the phone (kbd-window, as above: _front_check), OR (b) the screen comes back - vegas-keys' /run/vegas-ui/state
+goes to "on" from off, glance or pin (H1: not dim; a wake, or the glance or the PIN pad closing; a menu in between is
+transparent, tui.VegasApp._screen_seen) - while Network is the phone's current tmux window (screen_back). Both
+triggers come from the one inotify watch on /run/vegas-ui (kbd-window and state are written there by rename). One
+event per visit: a window selected while the screen is not on (off, glance, pin; e.g. a strip tap under the
+glance, or tmux from SSH) only marks Network current, and the event comes when the screen does ([BUILDER CHOICE]);
+screen_back reads kbd-window first, so a selection and a wake in the same batch count once. Not in front: no event.
+H1 (G5 correction): "on" from DIM is not the screen coming back - neither a re-sort nor R3's test (dim is left by any
+input, usually a touch on the list; a re-sort then could put another row under the finger). on from off, glance or pin
+still counts. Network's window selected while dimmed counts, at the selection itself (designer's default, [BUILDER
+CHOICE] on the timing): dim is a lit screen (VegasApp.screen_on), the input that selected the window was not on a row,
+and the return to "on" adds nothing. Menu over dim (dim, menu, on) is a return from dim: no event (the menu stays
+transparent, tui.VegasApp._screen_seen); off, menu, on is still a wake.
+G6 A row of a network that dropped out of range (F3's "gone" row) is drawn dim - bars, name, security and saved mark
+all in the dim colour - with "out of range" in place of its signal figures (dBm · band). A tap (or Enter) on it says
+"Out of range" on the message line and does nothing else: no join, no dialog. The next sort drops it (F3).
+R9: the sharing tools refuse with no uplink ("Not connected: nothing to share. Join a network first.", shown on the
+message line; the button stays "Hotspot off"); sharing that lost its uplink says "no uplink" in amber on the current-
+network lines and on the hotspot page (from the tools' status lines: uistatus.hotspot()['uplink']).
 """
 import re
 import shlex
+import statistics
 import sys
 import time
 import urllib.parse
@@ -37,12 +87,14 @@ from textual.widgets import Static
 
 from . import uictl, uistatus as st
 from .host import Runner
-from .theme import DIM, GREEN, TEXT
+from .theme import AMBER, DIM, GREEN, TEXT
 from .tui import AskScreen, Button, Scroll, ChoiceScreen, StateButton, VegasApp, notice, styled
 from .wpa import JoinGuard, Wpa, band, bars, heal, printable, show
 
 SHOWN = 6
-SCAN_STALE = 120          # s: R3, an automatic scan only when the last scan request is older than this
+SCAN_STALE = 120          # s: R3/R12, an automatic scan only when the list and the last request are older than this
+FRESH_SLACK = 2           # s: R12, BSS ages are whole seconds: a list counts as newer only beyond this
+OWN_LATE = 15             # s: F3, a list that lands this soon after our own scan request (results late) is sorted
 NET_WINDOW = 1            # tmux window of "main" that runs vegas-net (vegas-session)
 CHECK_URL = "http://connectivitycheck.gstatic.com/generate_204"   # [BUILDER CHOICE] spec 4.5
 UNSUPPORTED = ("802.1X", "WEP", "OWE")     # tapping one says "not supported yet" (ruling B10: OWE is not open)
@@ -73,7 +125,8 @@ def bars_text(dbm) -> Text:
 
 
 class NetRow(Static):
-    """One network in range: three text rows tall; tap or Enter chooses it."""
+    """One network in range: three text rows tall; tap or Enter chooses it. A network out of range (net["gone"],
+    F3) is drawn all dim with "out of range" in place of its signal figures (G6)."""
 
     can_focus = True
     BINDINGS = [Binding("enter", "choose", show=False)]
@@ -89,16 +142,17 @@ class NetRow(Static):
 
     def render(self) -> Text:
         n, w = self.net, max(self.size.width, 30)
-        t = bars_text(n["dbm"])
-        t.append(" " + show(n["ssid"])[:w - 6], style=f"bold {TEXT}")
-        left = f"     {n['dbm']} dBm · {band(n['freq'])}"
+        gone = bool(n.get("gone"))
+        t = bars_text(None if gone else n["dbm"])
+        t.append(" " + show(n["ssid"])[:w - 6], style=DIM if gone else f"bold {TEXT}")
+        left = "     out of range" if gone else f"     {n['dbm']} dBm · {band(n['freq'])}"   # F3/G6
         mark = ("○ " if n["sec"] == "open" else "● ") + n["sec"]
         right = mark + (" saved" if self.saved else "")
         t.append("\n" + left, style=DIM)
         t.append(" " * max(1, w - len(left) - len(right)))
-        t.append(mark, style=TEXT)
+        t.append(mark, style=DIM if gone else TEXT)
         if self.saved:
-            t.append(" saved", style=GREEN)
+            t.append(" saved", style=DIM if gone else GREEN)
         return t
 
     def on_click(self) -> None:
@@ -106,6 +160,13 @@ class NetRow(Static):
 
     def action_choose(self) -> None:
         self.post_message(self.Chosen(self.net))
+
+
+def freshest(t, ages, skip=None):
+    """clock() when a scan last saw the freshest BSS of `ages` (Wpa.bss_ages at clock t), leaving out bssid `skip`;
+    None = no such BSS."""
+    vals = [a for b, a in ages.items() if b != skip]
+    return t - min(vals) if vals else None
 
 
 def kinds(h) -> list:
@@ -123,7 +184,8 @@ class HotspotScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Scroll(classes="dialog"):
-            yield Static(Text(self.info), classes="text")   # SSIDs: plain text, no markup
+            yield Static(Text(self.info) if isinstance(self.info, str) else self.info,   # SSIDs: plain text, no markup
+                         classes="text")
             if self.qr:
                 yield Static(Text(self.qr, no_wrap=True), classes="text")
             if "wifi" in self.on:
@@ -175,16 +237,34 @@ class Net(VegasApp):
         self.nets, self.saved, self.expanded = [], {}, False
         self.status, self.hot, self.ssh = {}, {"kind": None}, []
         self.clock = clock or time.monotonic
-        self.scanned_at = None    # clock() of the last scan result; None = never
+        self.scanned_at = None    # clock() when a scan (R12: anybody's) last saw the table as a whole; None = never
+        self.table_seen = None    # the same without the associated BSS: a newer outside list is one beyond this
+        self.own_due = None       # F3: asked_at of our scan whose results were not in yet (the next list is sorted)
         self.asked_at = None      # clock() of the last scan request (automatic or Rescan, worked or not)
         self.busy = False
         self.front = False        # window 1 is the one in front of "main"
         self.status_seen = False  # the first status (hotspot state) is in: automatic scans may start
 
+    def shown(self) -> list:
+        """The rows on screen: the first SHOWN, or all of them while "more" is open (a shorter list: all of it)."""
+        return self.nets if self.expanded else self.nets[:SHOWN]
+
+    def list_age(self):
+        """F4: seconds; the MEDIAN age of the rows on screen (shown()), a row's age being the time since a scan
+        (anybody's, R12) last saw its network (its freshest BSS); an even count takes the mean of the two middle
+        ages. Rows without an age (a BSS the 4 KiB BSS reply cut off) are left out. No row with an age (empty list):
+        the age of the table as a whole (scanned_at). None = never scanned."""
+        now = self.clock()
+        ages = [now - n["seen"] for n in self.shown() if n.get("seen") is not None]
+        if ages:
+            return max(0, statistics.median(ages))
+        return None if self.scanned_at is None else max(0, now - self.scanned_at)
+
     @property
     def scan_age(self):
-        """Whole minutes since the last scan result; None = never."""
-        return None if self.scanned_at is None else int(max(0, self.clock() - self.scanned_at) // 60)
+        """Whole minutes of list_age() (F4: median of the rows on screen); None = never scanned."""
+        a = self.list_age()
+        return None if a is None else int(a // 60)
 
     def compose(self) -> ComposeResult:
         with Scroll(id="page"):
@@ -223,7 +303,34 @@ class Net(VegasApp):
         s = self.wpa.status()          # {} = wpa_supplicant did not answer ("Wi-Fi is off"; no automatic scan)
         if s.get("wpa_state") == "COMPLETED":
             s["rssi"] = self.wpa.rssi()
-        return s, st.hotspot(self.runner), st.ssh_local_addrs()
+        return s, st.hotspot(self.runner), st.ssh_local_addrs(), self._newer_list(s)
+
+    def _newer_list(self, s):
+        """R12 (worker thread): (t, ages, nets, saved, assoc) when wpa_supplicant holds a newer list than the one
+        last brought in (a scan it or wpa_cli asked for), else None. Newer = some BSS other than the associated one
+        was seen after table_seen (F4 note: the associated BSS may always read fresh; it alone never pulls the list
+        in). Not while our own scan runs (it reads the list itself), not without BSS ages (an old wpa_supplicant)."""
+        if not s or self.busy:
+            return None
+        t, ages = self.clock(), self.wpa.bss_ages()
+        if not ages:
+            return None
+        assoc = s.get("bssid", "").lower() or None
+        newest = freshest(t, ages, assoc if self.table_seen is not None else None)
+        if newest is None or (self.table_seen is not None and newest <= self.table_seen + FRESH_SLACK):
+            return None
+        return t, ages, self.wpa.scan_results(), self.wpa.networks(), assoc
+
+    def _still_newer(self, newer) -> bool:
+        """UI thread: a list _newer_list read in the worker is still newer than the one on screen (the same test, made
+        again: our scan may have brought a newer list in meanwhile), and our scan is not running (it reads its own)."""
+        if self.busy:
+            return False
+        t, ages, _nets, _saved, assoc = newer
+        if not ages:
+            return True
+        newest = freshest(t, ages, assoc if self.table_seen is not None else None)
+        return newest is not None and (self.table_seen is None or newest > self.table_seen + FRESH_SLACK)
 
     def refresh_status(self) -> None:
         self._front_check()          # one file read: the fallback when the inotify watch is not there
@@ -233,25 +340,62 @@ class Net(VegasApp):
     def front_changed(self) -> None:
         self._front_check()
 
-    def _front_check(self, window=None) -> None:
-        """window: the index in front as a str; None = read /run/vegas-ui/kbd-window (missing: no change)."""
+    def _front_check(self, window=None) -> bool:
+        """G5 trigger (a): window = the index in front as a str; None = read /run/vegas-ui/kbd-window (missing: no
+        change). Network's window selected while the screen is on (or dimmed, H1) runs came_to_front; selected while
+        the screen is off, or under the glance or PIN pad, the event waits for the screen to come back (screen_back:
+        one front event per visit, never two). True = came_to_front started a status gather."""
         if window is None:
             window = uictl.ui_read("kbd-window")
             if window is None:
-                return
+                return False
         front = window == str(NET_WINDOW)
         came = front and not self.front
         self.front = front
-        if came and self.status_seen:
-            self.bg(self._gather, lambda res: (self._apply_status(res), self.auto_scan()))   # hotspot state now
+        return bool(came and self.screen_on() and self.came_to_front())
+
+    def screen_back(self) -> bool:
+        """G5 trigger (b): the screen came back (tui: state "on" after off/glance/pin; H1: not dim) while Network is the
+        current window of "main". kbd-window is read first: a window change the watch has not reported yet counts
+        once, as (a). True = a status gather was started (it refreshes the page)."""
+        was = self.front
+        started = self._front_check()       # the screen is on now: a window just selected fires here, as (a)
+        if was and self.front:              # Network was already the current window (or was selected while dark)
+            started = self.came_to_front()
+        return started
+
+    def came_to_front(self) -> bool:
+        """G5: Network comes to the front (its window selected, or the screen back with it in front): the one place
+        F3's re-sort and R3's automatic scan start from. True = a status gather was started (it refreshes the page)."""
+        self.resort()              # F3: sorted at the front event itself (no finger on a row yet), not after a gather
+        if not self.status_seen:   # start-up: the first status runs auto_scan itself
+            return False
+        # then a newer list the gather brings in is sorted too (it is part of coming up), and R3 looks at the age
+        self.bg(self._gather, lambda res: (self._apply_status(res, front=True), self.auto_scan()))
+        return True
+
+    def resort(self) -> None:
+        """F3: Network came to the front: sort the rows by signal again and drop the networks out of range. Between
+        sorts rows are only updated in place or appended (_take_list)."""
+        nets = sorted((n for n in self.nets if not n.get("gone")), key=lambda n: -n["dbm"])
+        if [id(n) for n in nets] == [id(n) for n in self.nets]:
+            return
+        self.nets = nets
+        self._paint_head()
+        self.call_later(self._paint_list)
 
     def auto_scan(self) -> None:
-        """R3: one scan, only in front, screen on, Wi-Fi answering, hotspot off, last request older than SCAN_STALE."""
+        """R3: one scan, only in front, screen on, Wi-Fi answering, hotspot off, the list on screen older than
+        SCAN_STALE (R12: whoever scanned it, so a list wpa_supplicant has just refreshed is not scanned again) and our
+        last request too (a refused request is not repeated)."""
         if not self.front or self.busy or not self.status.get("wpa_state") or "wifi" in kinds(self.hot):
             return
         if uictl.screen_state() == "off":
             return
         if self.asked_at is not None and self.clock() - self.asked_at < SCAN_STALE:
+            return
+        age = self.list_age()             # F4: the median age of the rows on screen, as the head shows it
+        if age is not None and age < SCAN_STALE:
             return
         self.rescan()
 
@@ -261,8 +405,18 @@ class Net(VegasApp):
             self.say(HEALED[res], "warn" if res == "restored" else "ok")
             self.refresh_status()
 
-    def _apply_status(self, res) -> None:
-        self.status, self.hot, self.ssh = res
+    def _apply_status(self, res, front=False) -> None:
+        """front: the gather started when Network came to the front (F3: a newer list it brings in is sorted)."""
+        self.status, self.hot, self.ssh, *more = res      # more: [the newer list (R12) or None]; absent = none
+        newer = more[0] if more else None
+        if newer is not None and not self._still_newer(newer):
+            newer = None           # R12: read before a list brought in since (our scan): an older list never wins
+        due = self.own_due is not None and self.clock() - self.own_due <= OWN_LATE
+        if newer is not None:      # R12: an outside scan's list, before auto_scan looks at the age
+            self.own_due = None
+            self._take_list(newer, sort=due or front)   # F3: in place / appended, sorted as our late scan or on front
+        elif not due:
+            self.own_due = None
         first = not self.status_seen
         self.status_seen = True
         if first:
@@ -283,8 +437,11 @@ class Net(VegasApp):
         else:
             t = styled("Not connected", "warn")
             t.append("\n" + s.get("wpa_state", "").lower().replace("_", " "), style=DIM)
-        cur.update(t)
         on = kinds(self.hot)
+        if on and not self.hot.get("uplink", True):     # R9: sharing that lost its uplink stays on until its timer
+            t.append(" · ", style=DIM)
+            t.append("no uplink", style=AMBER)
+        cur.update(t)
         hb = self.q("#hotspot", StateButton)
         hb.set_state(f"on · {' + '.join(on)}" if on else "off")
         hb.set_class(bool(on), "on")
@@ -321,7 +478,9 @@ class Net(VegasApp):
                 if not self.wpa.scan():
                     return None
                 self.runner.sleep(3)
-                return self.wpa.scan_results(), self.wpa.networks()
+                t, ages = self.clock(), self.wpa.bss_ages()     # R12/F4: the rows' own ages (results late: older)
+                assoc = self.status.get("bssid", "").lower() or None
+                return t, ages, self.wpa.scan_results(), self.wpa.networks(), assoc
             except Exception:
                 return None
         self.bg(job, lambda res: self._apply_scan(res, tapped))
@@ -333,11 +492,53 @@ class Net(VegasApp):
             if tapped:
                 self.say("Scan: wpa_supplicant did not take the request. Rescan to try again.", "warn")
             return
-        self.nets, nets_saved = res
-        self.saved = {n["ssid"]: n for n in nets_saved}
-        self.scanned_at = self.clock()
+        self._take_list(res, sort=True)       # F3: Network's own scan sorts by signal
+        if res[1] and self.asked_at is not None and (self.table_seen is None
+                                                      or self.table_seen < self.asked_at - FRESH_SLACK):
+            self.own_due = self.asked_at      # the table is older than our request: its results are still due
+
+    def _take_list(self, res, sort) -> None:
+        """A list from wpa_supplicant's BSS table (R12: from our scan or anybody's). res = (t, ages, nets, saved,
+        assoc): t = clock() when the ages were read, ages = Wpa.bss_ages() (None: an old wpa_supplicant, the list
+        counts as seen at t). Each network gets 'seen' = t - the age of its freshest BSS (F4).
+        sort (F3: Network's own scan; coming to the front is resort()): the rows are drawn anew in signal order,
+        networks out of range dropped. Otherwise (a list Network did not ask for: wpa_supplicant scans every few
+        seconds while not connected) rows only update in place or get appended: a network still in range keeps its
+        row with the new values, a network that went away keeps its row, drawn "out of range" (its age keeps
+        growing), and new networks go after the rows, so a row is never moved or taken away under a finger.
+        A row's saved mark is updated in place."""
+        t, ages, nets, nets_saved, assoc = res
+        for n in nets:
+            if ages is None:
+                n["seen"] = t
+            else:
+                a = [ages[b] for b in n.get("bssids", ()) if b in ages]
+                n["seen"] = t - min(a) if a else None
+        saved = {n["ssid"]: n for n in nets_saved}
+        if not sort and self.nets:
+            new = {n["ssid"]: n for n in nets}
+            nets = [new.pop(o["ssid"], None) or dict(o, gone=True) for o in self.nets] + \
+                [n for n in nets if n["ssid"] in new]
+        self.nets, self.saved = nets, saved
+        if ages:
+            self.scanned_at = freshest(t, ages)
+            ts = freshest(t, ages, assoc)
+            self.table_seen = self.scanned_at if ts is None else ts
+        else:
+            self.scanned_at, self.table_seen = t, (t if ages is None else None)
         self._paint_head()
-        self.call_later(self._paint_list)   # async: the old rows must be gone before #empty can come back
+        rows, shown = list(self.query(NetRow)), self.shown()
+        if not rows or [r.net["ssid"] for r in rows] != [n["ssid"] for n in shown[:len(rows)]]:
+            self.call_later(self._paint_list)   # async: the old rows must be gone before #empty can come back
+            return
+        for row, n in zip(rows, shown):
+            row.net, row.saved = n, n["ssid"] in saved
+            row.refresh()
+        add = [NetRow(n, n["ssid"] in saved, classes="alt" if i % 2 else "")
+               for i, n in enumerate(shown[len(rows):], len(rows))]
+        if add:
+            self.q("#list", Vertical).mount(*add)      # after the rows on screen: none of them moves
+        self._paint_more()
 
     def _empty_text(self) -> str:
         if self.scanned_at is None:
@@ -349,11 +550,14 @@ class Net(VegasApp):
     async def _paint_list(self) -> None:
         box = self.q("#list", Vertical)
         await box.remove_children()        # not awaited = DuplicateIds (#empty) on the next empty scan
-        shown = self.nets if self.expanded else self.nets[:SHOWN]
+        shown = self.shown()
         rows = [NetRow(n, n["ssid"] in self.saved, classes="alt" if i % 2 else "") for i, n in enumerate(shown)]
         if not rows:
             rows = [Static(self._empty_text(), id="empty")]
         await box.mount(*rows)
+        self._paint_more()
+
+    def _paint_more(self) -> None:
         more = self.q("#more", Button)
         extra = len(self.nets) - SHOWN
         more.display = extra > 0
@@ -365,7 +569,9 @@ class Net(VegasApp):
     # --- choosing a network ---------------------------------------------------------------------------------------
     def on_net_row_chosen(self, ev: NetRow.Chosen) -> None:
         n = ev.net
-        if n["ssid"] in self.saved:
+        if n.get("gone"):      # G6: the last scan did not see it; a join would fail (and drop the Wi-Fi in use)
+            self.say("Out of range")
+        elif n["ssid"] in self.saved:
             self.saved_dialog(self.saved[n["ssid"]])
         elif n["sec"] in UNSUPPORTED:
             notice(self, f"{show(n['ssid'])}: {n['sec']}", "This kind of network is not supported yet.")
@@ -439,6 +645,7 @@ class Net(VegasApp):
         if bid == "more":
             self.expanded = not self.expanded
             self.call_later(self._paint_list)
+            self._paint_head()             # F4: other rows on screen, another median age
         elif bid == "rescan":
             self.rescan(tapped=True)
         elif bid == "mobile":
@@ -587,10 +794,14 @@ class Net(VegasApp):
             qr = r.out.rstrip("\n") if r.ok else ""
         if "usb" in on:
             lines += ["USB to laptop", "  " + self.hot["usb"]]
-        lines += [f"feeding from  {feed}",
-                  f"battery       {'?' if bat['cap'] is None else bat['cap']} %",
-                  f"processor     {'?' if soc is None else soc} °C"]
-        return "\n".join(lines), qr
+        info = Text("\n".join(lines + ["feeding from  "]))
+        if self.hot.get("uplink", True):
+            info.append(feed)
+        else:                                   # R9: on until its timer, nothing to feed from
+            info.append("no uplink", style=AMBER)
+        info.append(f"\nbattery       {'?' if bat['cap'] is None else bat['cap']} %"
+                    f"\nprocessor     {'?' if soc is None else soc} °C")
+        return info, qr
 
     def _hotspot_page_done(self, c) -> None:
         if c == "off-wifi":

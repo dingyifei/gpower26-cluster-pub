@@ -27,8 +27,18 @@ Strip (one line, 36 logical px tall over the camera band; nothing drawn over the
   band; wifi stays: it is the Network tap); rotated (796 wide) everything shows:
   "09:14 vegas5 MAIN ... wifi usb 41° 78%▲ kbd".
   taps : left half -> Home (tmux main:0), wifi/usb -> Network (main:1), kbd -> show/hide wvkbd, others -> Home.
+  F5 (25 Nov follow-on to R9): a tap on the AP badge (Wi-Fi "AP N" or "AP usb") opens Network (main:1) too.
   The feed writes its pid to /run/vegas-ui/strip.pid; vegasui.uictl sends it SIGUSR1 after every keyboard change
   (the tmux window rule, a swipe, a field), so the kbd badge follows at once instead of at the next 10 s read.
+  R13 (25 Nov): every switch the strip shows signals it the same way, so its badge follows at once: vegas-away
+  on/off/apply (AWAY, SSH), vegas-hotspot on/off and its own time-out (AP), vegas-usbshare on/off (AP usb),
+  vegas-charge full|band (amber 100). On SIGUSR1 the feed re-reads the 10 s set (links, badges) and the battery block
+  (level, sign, amber 100: R.battery + R.guard) and recomputes the charge word; the 60 s read stays for everything
+  else. The loop takes the wake/poke flags before its reads, so a signal during a pass gives another pass, never lost.
+  F5 (R9 follow-on): the strip's AP badge stays amber and unchanged when sharing has no uplink; the report's hotspot
+  line (wifi and usb) ends in an amber "no uplink" then. wifi: no IPv4 address on wlan0 (vegas-hotspot's rule and
+  the glance's). usb: vegas-usbshare's own ", no uplink" (its recorded uplink may not be wlan0), said once, in
+  amber; wlan0's rule only when the tool gives no status line.
 Cost: no fork in steady state. File reads every 5 s (SoC temperature, CPU cap), 10 s (links, badges, panel width
 over the sway socket), 60 s (battery, guard); a sway "output" subscription re-fits the strip right after a rotation.
 Prints a new line only when something shown changed; the clock changes on the minute. Only a running Wi-Fi hotspot
@@ -400,7 +410,7 @@ def on_click(ev):
         return                          # the ruler is for reading only
     if name == "kbd":
         toggle_keyboard()
-    elif name == "net":
+    elif name in ("net", "ap"):         # F5: the AP badge opens Network, as the wifi/usb words do
         show_window(1)
     else:
         show_window(0)
@@ -440,9 +450,11 @@ def bar():
     out.flush()
     wake = threading.Event()
     out_changed = threading.Event()
+    poked = threading.Event()   # R13: SIGUSR1 (a switch changed) also re-reads the battery block, not only a wake
     # vegas-status --ruler on|off: redraw now. The handler runs in the main thread, which may hold wake's internal
     # lock at that instant (inside wake.wait/clear), so it hands set() to a short thread instead of calling it.
-    signal.signal(signal.SIGUSR1, lambda *_: threading.Thread(target=wake.set, daemon=True).start())
+    signal.signal(signal.SIGUSR1, lambda *_: threading.Thread(target=lambda: (poked.set(), wake.set()),
+                                                              daemon=True).start())
     ui_write("strip.pid", str(os.getpid()))   # uictl pokes this feed (SIGUSR1) when the keyboard changes: badge at once
     threading.Thread(target=click_reader, args=(wake,), daemon=True).start()
     threading.Thread(target=output_watcher, args=(wake, out_changed), daemon=True).start()
@@ -452,6 +464,10 @@ def bar():
     while True:
         try:
             mono = time.monotonic()
+            # R13: take the wake and the poke before any read, so a signal that lands during the reads below (a
+            # hotspot status fork takes ~100 ms) leaves wake set and buys another pass instead of being cleared.
+            woke, pk = wake.is_set(), poked.is_set()
+            wake.clear(); poked.clear()
             if s is None or mono >= due["slow"]:
                 s = snapshot(want_tools=False)
                 due["slow"] = due["mid"] = due["fast"] = 0.0
@@ -459,7 +475,9 @@ def bar():
                 out_changed.clear()
                 time.sleep(0.2)               # let sway finish the change before asking for the new size
                 width = swayipc.output_width(default=width)
-            if mono >= due["mid"] or wake.is_set():
+            if pk:                            # R13: vegas-charge full|band: level, sign and the amber 100 now
+                s.update(bat=R.battery(), guard=R.guard())
+            if mono >= due["mid"] or woke or pk:   # a poke always recomputes the charge word/glyph with the new guard
                 width = swayipc.output_width(default=width)
                 hot = R.hotspot()
                 s.update(wifi=R.wifi(), usb=R.usb(), hot=hot, away=R.away(), rescue=R.rescue_pending(),
@@ -476,7 +494,6 @@ def bar():
             for k, period in (("fast", 5), ("mid", 10), ("slow", 60)):
                 if mono >= due[k]:
                     due[k] = mono + period
-            wake.clear()
             blocks = ruler_blocks(width) if ruler_on() else strip_blocks(s, R.clock(), width)
             line = json.dumps(blocks, ensure_ascii=False)
             if line != last:
@@ -533,11 +550,21 @@ def report(colour=None):
         "units " + c("%s failed" % ("?" if failed is None else failed), AMBER if failed else None),
         "disk " + R.fmt_gb(R.disk_free()) + " free")
     h = s["hot"]
+    # F5 (R9): sharing on with no uplink (no IPv4 address on wlan0: the tools' own rule and the glance's, read with
+    # no fork) ends its hotspot line in an amber "no uplink". The strip's AP badge is unchanged.
+    noup = ", " + c("no uplink", AMBER) if not w["addr"] else ""
     if h and h["kind"] == "wifi":
         L.append(c("hotspot wifi: %s, %s device(s)" % (h["ssid"] or "?", "?" if h["devices"] is None else h["devices"]),
-                   AMBER))
+                   AMBER) + noup)
     if R.usbshare_on():
-        L.append(c("hotspot usb: " + (R.run([R.tool("vegas-usbshare"), "status"]) or "on"), AMBER))
+        # F5 fix: the tool's own verdict for its own uplink (the "# uplink=" it recorded, VEGAS_UPLINK, may not be
+        # wlan0) is kept and only recoloured; wlan0's rule decides only when the tool did not answer.
+        us = R.run([R.tool("vegas-usbshare"), "status"])
+        told = bool(us) and us.endswith(", no uplink")
+        if told:
+            us = us[:-len(", no uplink")]
+        usb_noup = ", " + c("no uplink", AMBER) if told or (not us and not w["addr"]) else ""
+        L.append(c("hotspot usb: " + (us or "on"), AMBER) + usb_noup)
     if s["away_open"]:
         L.append(c("away on: SSH OPEN on Wi-Fi (vegas-away apply failed; see vegas-away status)", RED))
     elif s["away"]:

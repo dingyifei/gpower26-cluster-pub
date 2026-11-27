@@ -165,6 +165,9 @@ orb -m vegas-deb sudo VEGAS_SERIAL=<serial> bash linux/debian/build.sh "$(cat ~/
   this kernel has no nf_tables, so networkd's `IPMasquerade=` fails). The computer must renew its DHCP lease.
 - `vegas-hotspot on [min]|off|status|show`: Wi-Fi hotspot on the driver's `ap0` beside `wlan0` (same channel),
   hostapd WPA2, off after 60 min by default; name/passphrase in `/etc/vegas/hotspot.conf`.
+- Both sharing tools refuse `on` while `wlan0` has no IPv4 address ("Not connected: nothing to share. Join a network
+  first.", exit 1, nothing started); sharing that loses its uplink stays on, and `status` ends in `, no uplink` (R9,
+  not yet checked on #5).
 
 **Rescue:**
 - **Debian rescue root** (the `linux` partition in super) instead of the main root on the userdata disk:

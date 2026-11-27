@@ -5,9 +5,14 @@
 #   status full | band | ignored (chargeguard rejected the file) | full (pending) (written, guard has not run yet)
 # The override is in /run: it ends by itself at the next reboot. Temperature limits still apply (pauses at 42 degC,
 # powers off at 55). The guard is a oneshot started by its timer every 60 s; starting it here is the same pass.
+# R13: full|band signal the strip after the guard pass, so its battery block (amber 100) follows at once.
 set -eu
-ST=${VEGAS_ST:-/run/vegas-chargeguard}
+ST=${VEGAS_ST:-/run/vegas-chargeguard} UI=${VEGAS_SYSROOT:-}/run/vegas-ui
 apply() { [ -n "${VEGAS_ST:-}" ] || systemctl start vegas-chargeguard.service || echo "vegas-charge: guard pass failed; the timer applies it within 60 s" >&2; }
+# R13: SIGUSR1 to the strip feed (the pid it wrote, only while that pid is still `vegas-status --bar`): the badge now
+strip() { _p=$(cat $UI/strip.pid 2>/dev/null) || return 0; case $_p in ''|*[!0-9]*) return 0 ;; esac
+  _a=" $(tr '\0' ' ' < /proc/$_p/cmdline 2>/dev/null) "   # whole argv words, as uictl.poke_strip: never --bar-once
+  case $_a in *"vegas-status "*) case $_a in *" --bar "*) kill -USR1 "$_p" 2>/dev/null ;; esac ;; esac; return 0; }
 status() {
   s=$(cat "$ST/override-state" 2>/dev/null || true)
   if [ ! -e "$ST/override" ]; then echo band
@@ -15,8 +20,8 @@ status() {
 }
 case "${1:-}" in
   full)   mkdir -p "$ST"; printf 'STOP=100\nRESUME=99\n' > "$ST/override.new"; mv -f "$ST/override.new" "$ST/override"
-          apply; status ;;
-  band)   rm -f "$ST/override"; apply; status ;;
+          apply; strip; status ;;
+  band)   rm -f "$ST/override"; apply; strip; status ;;
   status) status ;;
   *) echo "usage: vegas-charge full|band|status" >&2; exit 2 ;;
 esac

@@ -7,7 +7,51 @@
 #   Q6  wake shows the glance first, a volume key continues; Q9 volume keys = PageUp/PageDown in the terminal
 #   Q15 dim 45 s, off 60 s, glance 10 s, PIN pad 30 s; Away dim 2 min, off 3 min; Q18 5 s Power hold = reboot
 #   R7  menu Cancel returns where the menu opened: from the dark (off/glance) to the glance, muted, fresh 10 s;
-#       from on/dim to on; Away locked to off. The 60 s idle close always ends dark.
+#       from on/dim to on. The 60 s idle close always ends dark.
+#   R8  (25 Nov) a menu opened from the dark (off, glance, the Away pad; Away locked or not) is drawn over the glance,
+#       never over the lit shell: from off the glance comes up first (backlight only once it is mapped). bemenu
+#       0.6.15 always asks for the layer-shell TOP layer and sway 1.10 draws a fullscreen window above TOP (VM probe,
+#       25 Nov), so for the menu the glance window leaves fullscreen and becomes an output-sized floating window
+#       (floating is under TOP): the menu shows over the glance, and a touch above the menu lands on the glance
+#       window, which reads no input. Back to fullscreen after. Until the glance maps (slow foot start) the screen
+#       stays dark and touch muted, Away locked or not; tick floats and lights it when it maps. No map in
+#       MENU_DARK_MAX or a refused float: see F6/F7 below (was: Away off the menu over the shell taking touch,
+#       Away locked the menu running unseen behind the fullscreen glance). Cancel and Rotate (rotated first, then)
+#       back to the glance, muted, a fresh 10 s, Away locked too (was: off); from the Away pad see F1. Home /
+#       Restart terminal close the glance and unmute. Screen off, the reboots, Power off and the 60 s close as
+#       before. Touch in a menu over the glance: as built (Away off it takes touch, Away locked keys only); whether
+#       it should take touch at all is still the designer's question. The F6 fallback over the shell: keys only.
+#   R10 (25 Nov) Home asks for the PIN pad over ctl ("pin-ask off|set <id>": Away off / the first PIN, twice); the
+#       pad then has a fifth Cancel row. Only from the lit screen (on/dim): else refused ("dark": off, glance, the
+#       Away pad; "busy": a menu or another pad). The answer goes to /run/vegas-ui/pin-ask as one line
+#       "id=<id> result=open|ok|cancel|timeout|refused [why=<word>]" (temp + rename: Home's inotify on
+#       /run/vegas-ui sees it, as the state file). open = the pad is up; ok = right PIN (off: Home then runs
+#       vegas-away off) or a new PIN stored by vegasui.pin.set_pin (set: Home then runs vegas-away on). Cancel key,
+#       the 30 s give-up (timeout) and Power with no highlight go back to Home (on), never dark; screen off / a
+#       Power hold end it as cancel; any menu (Power hold or ctl "menu") ends it as cancel first, so that menu opens
+#       from on and its Cancel goes back to Home. The check stays vegasui.pin's (same tries, same waits).
+#   F1  (R7/R8 follow-on) a menu opened from the Away pad (state pin, Away locked): Cancel / Esc go back to the pad,
+#       fresh (nothing typed, no highlight, the 30 s from now), drawn by the same glance window put back to fullscreen.
+#       From the dark or the glance (Away locked or not): back to the glance, as R7/R8.
+#   F6/F7 (R8 fallback) a menu from the dark is started only once the glance is mapped and floated under it: no menu
+#       process runs (none takes keys) while the screen is dark waiting for the glance; meanwhile state "menu" with
+#       no menu (menu_wait): Vol and a Power press do nothing, a Power hold gives up the wait (as Esc would). Failure =
+#       sway refuses the float, or the glance has not mapped after MENU_DARK_MAX (5 s). F6 Away off: the menu over
+#       the shell (glance closed) but KEYS ONLY: touch stays muted while it is open (menu_keys_only), also against
+#       the swaymsg-mute retry; Home / Restart terminal unmute as usual. Also keys only when the glance under a
+#       running menu dies (Away off; review fix). MENU_DARK_MAX counts from the menu request (map wait included).
+#       A ctl "away changed" that locks Away under a menu from the dark ends it dark (to_off; review fix).
+#       F7 Away locked: the menu does not open at all: logged, the glance closed and the screen dark (to_off; never
+#       the shell). The 5 s Power hold reboot is
+#       the Inputs thread's alone and does not pass through the menu code (keys-test checks it on this path).
+#   H3  (25 Nov) each wrong PIN try is journaled as "PIN wrong (<n>)", n = vegasui.pin's running fail count
+#       (/var/lib/vegas/away-fails; it goes past 5, never reset by a wait), and a wait that starts or lengthens as
+#       "PIN wait <s> s" (seconds). Never the digits or how many were typed. The wake pad and Home's "off" pad (the
+#       only pads that check a PIN; "set" checks nothing, so it logs neither).
+#   H4  (25 Nov) wait wording from vegasui.pin.wait_msg: a key during a wait "wait 30 s" (under 120 s) or whole
+#       minutes rounded up "wait 2 min" .. "wait 60 min"; the wrong try that starts or lengthens one "wrong, wait 30 s"
+#       / "wrong, wait 32 min". Every message this file puts on the pad's line is <= 18 cells (keys-test checks the
+#       whole set); the glance draws the wait ones red (vegasui.pin.is_wait_msg), the rest amber.
 # Spec: docs/ui/ui-spec.md section 2. Keys/touch are found by device name, never by event number.
 # Threads: Inputs reads evdev and alone handles the 5 s hold (os.sync with a 2 s cap, then reboot(2)), so a logic
 # thread stuck in a swaymsg/tmux call (all have timeouts) can never stop the emergency reboot.
@@ -15,7 +59,8 @@
 # /usr/lib/vegas/vegas-menu <full|full-prog|short> <upright|landscape> (prints the chosen row; executed here as root).
 # Shared code: vegasui.pad (PIN pad geometry, same as the glance draws) and vegasui.pin (PIN check + lockout).
 # Test hooks: VEGAS_SYSROOT prefixes every file path (sysfs and /etc,/run,/var state), VEGAS_KEYS_DRYRUN=1 logs
-# reboots/poweroff instead of doing them, VEGAS_MENU / VEGAS_GLANCE / VEGAS_UI_LIB override the helper paths.
+# reboots/poweroff instead of doing them, VEGAS_MENU / VEGAS_GLANCE / VEGAS_ROTATE / VEGAS_UI_LIB override the
+# helper paths.
 import ctypes, glob, json, os, queue, select, signal, subprocess, sys, threading, time, traceback
 import evdev
 from evdev import ecodes as E
@@ -32,9 +77,12 @@ UI = P("/run/vegas-ui")
 AWAY = P("/etc/vegas/away")          # Away on (D17); PIN hash and fail counter are vegasui.pin's
 MENU = os.environ.get("VEGAS_MENU", "/usr/lib/vegas/vegas-menu")
 GLANCE = os.environ.get("VEGAS_GLANCE", "/usr/lib/vegas/vegas-glance")
+ROTATE = os.environ.get("VEGAS_ROTATE", "/usr/local/sbin/vegas-rotate")
 
 HOLD, EMERGENCY = 0.8, 5.0
 T_DIM, T_OFF, T_AWAY_DIM, T_AWAY_OFF, T_GLANCE, T_PIN = 45, 60, 120, 180, 10, 30
+MENU_DARK_MAX = 5.0          # R8/F6/F7: longest dark wait (from the menu request) for the glance to map under a menu;
+                             # then F6 (Away off: keys-only menu over the shell) or F7 (Away locked: screen off)
 DIM_LEVEL = 205                                          # [BUILDER CHOICE] 10 % of 2047
 STEPS = [20, 40, 70, 110, 170, 250, 360, 520, 700, 889, 1200, 1600, 2047]   # [BUILDER CHOICE]
 NAMES = {"mtk-kpd": "kpd", "mtk-pmic-keys": "pmic", "ILITEK_TDDI": "touch"}
@@ -215,14 +263,15 @@ class Inputs(threading.Thread):
                 self.q.put(("touch", down, self.x * 1080 / mx, self.y * 2388 / my))
 
 
-def pad_hit(px, py, rotation):
+def pad_hit(px, py, rotation, cancel=False):
     """Map a panel-pixel touch (upright 1080x2388) to a PIN pad key name or None, through vegasui.pad (the same
-    geometry the glance window draws). Raw touch axes assumed to follow the upright panel (Q20 open)."""
+    geometry the glance window draws; cancel=True: Home's pad with the R10 Cancel row). Raw touch axes assumed to
+    follow the upright panel (Q20 open)."""
     if vpad is None: return None
     if rotation == "90":    x, y, w, h = py, 1080 - px, 2388, 1080    # camera left, keys up   [UNVERIFIED]
     elif rotation == "270": x, y, w, h = 2388 - py, px, 2388, 1080    # camera right           [UNVERIFIED]
     else:                   x, y, w, h = px, py, 1080, 2388
-    return vpad.hit(x, y, w, h)
+    return vpad.hit(x, y, w, h, cancel)
 
 
 class Keys:
@@ -239,11 +288,18 @@ class Keys:
         self.mute_at = None                 # pending touch mute (waits for finger lift, max 3 s)
         self.touch_down = False
         self.glance = self.menu = None
-        self.dark = False                   # in glance/pin with the backlight held at 0 (Away, window not mapped yet)
+        self.dark = False                   # glance/pin (Away) or a menu from the dark (R8): backlight held at 0
+                                            # until the glance window is mapped
         self.unmute_try = 0.0
-        self.menu_back = "on"                # where Cancel returns: on | glance | off (to_menu, R7)
+        self.menu_back = "on"                # where Cancel returns: on | glance | pad (to_menu, R7/R8, F1)
+        self.menu_glance = False            # R8: this menu is drawn over the (floating) glance window
+        self.menu_dark_t = 0.0              # R8: when a menu from the dark started waiting for the glance to map
+        self.menu_wait = None               # F6/F7: menu variant waiting for the glance (no menu process yet)
+        self.menu_keys_only = False         # F6: menu over the shell (Away off fallback): touch stays muted
         self.unlocked = False               # Away: right PIN entered since the last screen-off
         self.pin, self.hl, self.msg = "", None, ""
+        self.ask = self.ask_id = None       # R10: Home's pad: ask = off | set | again, ask_id = Home's request id
+        self.ask_first = ""                 # R10 set: the first entry, waiting for the same PIN again
 
     # ---- helpers -------------------------------------------------------------------------------------------
     def read_level(self):
@@ -321,8 +377,10 @@ class Keys:
     # ---- screen states (D4) --------------------------------------------------------------------------------
     def to_off(self):
         self.backlight(0); self.dark = False
+        self.ask_end("cancel")                     # R10: screen off ends Home's pad (Home hears "cancel")
         kill_child(self.glance); self.glance = None
-        kill_child(self.menu); self.menu = None
+        kill_child(self.menu); self.menu = None; self.menu_glance = False
+        self.menu_wait, self.menu_keys_only = None, False
         self.unlocked, self.pin, self.hl, self.msg = False, "", None, ""
         self.mute_at = time.monotonic() + 3.0      # mute once the finger is up (else sway sees a stuck touch)
         self.set_state("off")
@@ -333,14 +391,22 @@ class Keys:
             self.mute_at = None
             self.mute(True)
 
-    def to_glance(self):
-        self.set_state("glance"); self.dark = False
-        if self.glance is None or self.glance.poll() is not None:
+    def glance_alive(self): return self.glance is not None and self.glance.poll() is None
+
+    def glance_spawn(self):
+        if not self.glance_alive():
             try: self.glance = spawn([GLANCE])
             except OSError as e: log("glance", e); self.glance = None
-        end = time.monotonic() + 1.5
+
+    def glance_wait_mapped(self, limit=1.5):
+        end = time.monotonic() + limit
         while time.monotonic() < end and not self.mapped("vegas-glance"): time.sleep(0.1)
-        if not self.mapped("vegas-glance") and self.locked():
+        return self.mapped("vegas-glance")
+
+    def to_glance(self):
+        self.set_state("glance"); self.dark = False
+        self.glance_spawn()
+        if not self.glance_wait_mapped() and self.locked():
             log("glance not mapped; Away locked, screen stays dark")   # never light the shell while Away
             self.dark = True                     # tick lights it once the window is mapped
         else:                                    # not Away: a lit (maybe hung) screen beats a phone that looks dead
@@ -348,7 +414,8 @@ class Keys:
         self.entered = time.monotonic()          # the 10 s count from when it is visible
 
     def to_on(self):
-        kill_child(self.glance); self.glance = None
+        kill_child(self.glance); self.glance = None; self.menu_glance = False
+        self.menu_wait, self.menu_keys_only = None, False
         self.mute_at = None
         self.mute(False)
         self.backlight(self.level); self.dark = False
@@ -366,59 +433,150 @@ class Keys:
         self.write_pin()
 
     def write_pin(self):
-        writef(UI + "/pin", "n=%d max=6 hl=%s msg=%s" % (len(self.pin), "-" if self.hl is None else self.hl, self.msg))
+        writef(UI + "/pin", "n=%d max=6 hl=%s ask=%s msg=%s" % (len(self.pin), "-" if self.hl is None else self.hl,
+                                                                self.ask or "-", self.msg))
+
+    def output_size(self):
+        """Logical size of the panel output as sway has it now (rotation applied), for the R8 floating glance."""
+        try:
+            for o in json.loads(run(["swaymsg", "-t", "get_outputs"], 0.5) or "[]"):
+                r = o.get("rect") or {}
+                if o.get("active") and r.get("width") and r.get("height"): return int(r["width"]), int(r["height"])
+        except (ValueError, TypeError): pass
+        return (796, 360) if readf(UI + "/rotation", "normal") in ("90", "270") else (360, 796)   # #5 at scale 3
+
+    def glance_float(self, on):
+        """R8: on = the glance window leaves fullscreen for an output-sized floating window at 0,0 (sway draws
+        floating windows under the layer-shell TOP layer, where bemenu is; fullscreen above it); off = fullscreen
+        again. Runtime swaymsg commands on our own window only (D10: never reload/exit). True when sway took it."""
+        if on:
+            w, h = self.output_size()
+            cmd = ('[app_id="vegas-glance"] fullscreen disable, floating enable, border none, '
+                   'resize set width %d px height %d px, move absolute position 0 0' % (w, h))
+        else:
+            cmd = '[app_id="vegas-glance"] fullscreen enable'
+        return run(["swaymsg", "-q", cmd]) is not None
 
     def to_menu(self):
-        variant = "short" if self.locked() else ("full-prog" if self.context() == "prog" else "full")
-        # R7: Cancel goes back where the menu came from. Locked (Away): the dark, as before. From the dark (off, or
-        # the glance, which is still the dark side: touch muted, no shell reachable) back to the glance; from the lit
+        if self.ask: self.ask_finish("cancel")       # R10: any menu (Power hold, ctl menu) ends Home's pad first:
+        locked = self.locked()                       # the menu then opens from on and Cancel goes back to Home
+        variant = "short" if locked else ("full-prog" if self.context() == "prog" else "full")
+        # R7/R8/F1: Cancel goes back where the menu came from. From the Away pad back to a fresh pad (F1); from the
+        # dark (off, the glance: touch muted, no shell reachable) back to the glance, Away locked or not; from the lit
         # shell (on, and dim: the same terminal at a lower backlight, touch live) back to on.
-        self.menu_back = "off" if self.locked() else ("glance" if self.state in (None, "off", "glance") else "on")
-        kill_child(self.glance); self.glance = None
-        if not self.locked():
-            self.mute_at = None; self.mute(False)
-        else:
-            self.mute(True)                       # keys only: taps above the menu would reach the terminal
-        self.backlight(self.level); self.dark = False
+        dark = self.state in (None, "off", "glance", "pin")
+        self.menu_back = ("pad" if self.state == "pin" and locked and vpad is not None else
+                          "glance" if dark else "on")
+        self.menu_glance = self.menu_keys_only = False
+        self.menu_wait = None
+        self.activity = time.monotonic()
+        if not dark:
+            kill_child(self.glance); self.glance = None
+            self.dark = False
+            if not locked: self.mute_at = None; self.mute(False)   # as built: a menu from the lit shell takes touch
+            else: self.mute(True)
+            self.backlight(self.level)
+            if self.menu_spawn(variant): self.set_state("menu")
+            return
+        # R8: the menu is drawn over the glance, never the shell: from off the glance comes up first, lit only once
+        # it is mapped and out of fullscreen (floating, under the menu's layer). F6/F7: no menu process until then.
+        if self.state in (None, "off"): self.backlight(0)
+        self.mute_at = None; self.mute(True)         # muted while dark (and keys only: taps reach the window under)
+        self.menu_dark_t = time.monotonic()          # review fix: MENU_DARK_MAX counts from the request, map wait included
+        self.glance_spawn()
+        mapped = self.glance_wait_mapped()
+        self.menu_wait = variant
+        if mapped:                                   # state "menu" only once the menu runs (tests, Home read it)
+            if self.menu_over_glance(): self.set_state("menu")
+            return
+        self.set_state("menu")
+        # not mapped yet (slow foot start), Away locked or not: dark and muted, no menu; tick floats, lights and starts
+        # the menu once the glance maps, or gives up after MENU_DARK_MAX (menu_failed)
+        log("menu: waiting for the glance to map (dark, no menu yet)")
+        self.dark = True; self.backlight(0)
+
+    def menu_over_glance(self):
+        """R8: the glance is mapped: float it under the menu, light it, then start the waiting menu. Refused float:
+        menu_failed (F6/F7). True when a menu now runs."""
+        if not self.glance_float(True): return self.menu_failed("sway refused the glance float")
+        variant, self.menu_wait = self.menu_wait, None
+        self.menu_glance, self.dark = True, False
+        self.backlight(self.level)
+        if not self.locked(): self.mute(False)       # as built (R8): Away off, a menu over the glance takes touch
+        return self.menu_spawn(variant)
+
+    def menu_failed(self, why):
+        """R8 fallback. F6 Away off: the menu over the shell (glance closed), keys only: touch stays muted. F7 Away
+        locked: no menu at all (one nobody can see must not take keys): logged, the glance closed, dark.
+        True when a menu now runs."""
+        variant, self.menu_wait = self.menu_wait, None
+        if self.locked():
+            log("menu: %s; Away locked: menu not opened, screen off (F7)" % why)
+            self.to_off(); return False
+        log("menu: %s; menu over the shell, keys only (F6, Away off)" % why)
+        kill_child(self.glance); self.glance = None; self.menu_glance = False
+        self.menu_keys_only = True
+        self.mute_at = None; self.mute(True)
+        self.dark = False; self.backlight(self.level)
+        return self.menu_spawn(variant)
+
+    def menu_spawn(self, variant):
+        """Start vegas-menu; its answer comes back through the queue. False (and menu_close) when it cannot start."""
         rot = "landscape" if readf(UI + "/rotation", "normal") in ("90", "270") else "upright"
         try:
             self.menu = spawn([MENU, variant, rot], stdout=subprocess.PIPE)
         except OSError as e:
             log("menu", e); self.menu = None
-            return self.menu_close()
+            self.menu_close(); return False
         m = self.menu
         threading.Thread(target=lambda: self.q.put(("menu", m, m.communicate()[0], m.returncode)),
                          daemon=True).start()
         self.activity = time.monotonic()
-        self.set_state("menu")
+        return True
 
     def menu_close(self):
-        """Cancel / Esc (R7): back to where the menu was opened (menu_back). The 60 s idle close is not this: tick
-        always ends it in the dark."""
-        if self.menu_back == "off": self.to_off()
+        """Cancel / Esc (R7/R8/F1): back to where the menu was opened (menu_back). The 60 s idle close is not this:
+        tick always ends it in the dark."""
+        self.menu_wait, self.menu_keys_only = None, False
+        if self.menu_back == "pad": self.back_to_glance(pad=True)
         elif self.menu_back == "glance": self.back_to_glance()
         else: self.to_on()
 
-    def back_to_glance(self):
-        """Menu opened from the dark with Away off: the menu took touch (as built); the glance gets the mute back
-        and a fresh 10 s. The mute is in place before the backlight comes on: a Cancel tapped by finger can reach
-        here before its lift, so this waits for the lift first (wait_touch_up, at most 3 s, as to_off's deferred
-        mute; other events are kept in order). Dark until the glance maps or 1.5 s pass; Away is off here, so after
-        that it lights anyway, as a wake from off does (to_glance: a lit, maybe hung screen beats one that looks
-        dead), and the shell under the closed menu can then show lit, with touch muted."""
-        self.backlight(0)
+    def back_to_glance(self, rotate_to=None, pad=False):
+        """Menu opened from the dark (R7/R8, Away locked or not): the glance with the mute back and a fresh 10 s;
+        pad=True (F1, opened from the Away pad): the pad, fresh (nothing typed, the 30 s from now).
+        The mute is in place before anything else: a Cancel tapped by finger can reach here before its lift, so
+        this waits for the lift first (wait_touch_up, at most 3 s, as to_off's deferred mute; other events are kept
+        in order). R8: the glance window under the menu goes back to fullscreen (rotate_to: the Rotate row, done
+        after that, so the fullscreen window follows the new output size). If the glance is gone (no float, sway
+        trouble): dark, and the glance comes up as on a wake (to_glance: Away locked stays dark until it maps)."""
         kill_child(self.menu); self.menu = None
         self.wait_touch_up()
         self.mute_at = None
         self.mute(True)
+        if self.menu_glance and self.glance_alive():
+            self.menu_glance = False
+            if pad: self.to_pin()                # pad state first: the window's next frame is the pad
+            self.glance_float(False)
+            if rotate_to: run([ROTATE, rotate_to], 5)
+            if not self.dark: self.backlight(self.level)
+            if not pad: self.set_state("glance")  # entered = now: the fresh 10 s
+            return
+        self.menu_glance = False
+        self.backlight(0)
+        if rotate_to: run([ROTATE, rotate_to], 5)
         self.to_glance()
+        if pad and self.state == "glance" and self.locked(): self.to_pin()
 
     # ---- actions (2.7), executed here as root ----------------------------------------------------------------
     def action(self, row):
         row = row.strip()
         log("menu:", row or "(cancel)")
+        if row == "Rotate" and self.menu_back == "glance" and not self.locked():   # R8: rotate, stay on the glance
+            cur = readf(UI + "/rotation", "normal")
+            return self.back_to_glance(readf(UI + "/rotation-last", "90") if cur == "normal" else "normal")
         if row == "Screen off" or self.locked(): self.to_off()   # the short menu leaves the screen dark
-        else: self.to_on()
+        else: self.to_on()                       # R8: Home, Restart terminal: glance closed, touch live
         if row in ("Reboot to Android", "Power off now"):    # "Power off now" = the menu's confirmed row
             sync_capped()
             cmd = ["systemctl", "poweroff" if row.startswith("Power") else "reboot"]
@@ -434,7 +592,7 @@ class Keys:
             cur = readf(UI + "/rotation", "normal")
             to = readf(UI + "/rotation-last", "90") if cur == "normal" else "normal"
             self.wait_touch_up()
-            run(["/usr/local/sbin/vegas-rotate", to], 5)
+            run([ROTATE, to], 5)
         elif row == "Restart terminal":
             pid = readf(UI + "/term.pid")
             if pid.isdigit() and readf("/proc/%s/comm" % pid) == "foot":   # never a stale pid (could be anything)
@@ -448,18 +606,79 @@ class Keys:
             run(["tmux", "select-window", "-t", "main:0"])
 
     # ---- PIN pad (D17): lockout rules and the hash live in vegasui.pin ------------------------------------------
+    def pad_names(self): return vpad.names(bool(self.ask)) if vpad else PAD
+
+    def ask_reply(self, rid, result, why=""):
+        """R10: Home's answer file (one line, temp + rename; Home watches /run/vegas-ui with inotify)."""
+        if rid: writef(UI + "/pin-ask", "id=%s result=%s%s" % (rid, result, " why=" + why if why else ""))
+
+    def ask_start(self, purpose, rid):
+        """R10: ctl "pin-ask off|set <id>" from Home: the pad, with its Cancel row, over the lit shell."""
+        if purpose not in ("off", "set") or not rid.replace("-", "").isalnum() or len(rid) > 40:
+            return log("ctl: bad pin-ask", purpose, rid)
+        why = ("nopad" if vpin is None or vpad is None else
+               "dark" if self.state in (None, "off", "glance", "pin") and not self.ask else
+               "busy" if self.state not in ("on", "dim") or self.ask else
+               "away-on" if purpose == "set" and self.away() else
+               "away-off" if purpose == "off" and not self.away() else "")
+        if why:
+            log("pin-ask", purpose, "refused:", why); return self.ask_reply(rid, "refused", why)
+        log("pin-ask", purpose)
+        self.ask, self.ask_id, self.ask_first = purpose, rid, ""
+        self.wait_touch_up()                     # the Home button's lift; then the pad reads the taps (grab)
+        self.mute_at = None; self.mute(True)
+        self.backlight(self.level); self.dark = False
+        self.to_pin()                            # state pin + pad file first: the window's first frame is the pad
+        self.glance_spawn()
+        self.ask_reply(rid, "open")
+
+    def ask_end(self, result):
+        """R10: Home's pad is over: answer Home (the screen state is the caller's)."""
+        if self.ask is None: return
+        rid, self.ask, self.ask_id, self.ask_first = self.ask_id, None, None, ""
+        self.pin, self.hl, self.msg = "", None, ""
+        log("pin-ask:", result)
+        self.ask_reply(rid, result)
+
+    def ask_finish(self, result):
+        """R10: back to Home (on: pad window closed, touch live), then the answer, so Home's next step sees "on"."""
+        self.to_on()
+        self.ask_end(result)
+
     def pad_key(self, k):
         if vpin is None:
             self.msg = "PIN check missing"; return self.write_pin()
+        if k == "cancel":
+            return self.ask_finish("cancel") if self.ask else None
+        if self.ask in ("set", "again"):         # R10: a new PIN, twice; no lockout (nothing is checked)
+            if k == "del": self.pin, self.msg = self.pin[:-1], ""
+            elif k == "ok":
+                if not vpin.valid(self.pin): self.pin, self.msg = "", "4 to 6 digits"
+                elif self.ask == "set": self.ask_first, self.pin, self.ask, self.msg = self.pin, "", "again", ""
+                elif self.pin == self.ask_first:
+                    try: vpin.set_pin(self.pin)
+                    except (OSError, ValueError) as e:
+                        log("set_pin", e); self.pin, self.msg = "", "PIN not saved"; return self.write_pin()
+                    log("PIN set (asked by Home)"); return self.ask_finish("ok")
+                else: self.ask, self.ask_first, self.pin, self.msg = "set", "", "", "not the same PIN"
+            elif len(self.pin) < 6: self.pin, self.msg = self.pin + k, ""
+            return self.write_pin()
         left = vpin.locked_for()
         if left:
-            self.pin, self.msg = "", "wait %ds" % left; return self.write_pin()
+            self.pin, self.msg = "", vpin.wait_msg(left); return self.write_pin()   # H4: "wait 30 s" / "wait 60 min"
         if k == "del": self.pin, self.msg = self.pin[:-1], ""
         elif k == "ok":
+            n0 = vpin.fails()
             res, lock = vpin.check(self.pin)
             if res == "ok":
+                if self.ask: log("PIN ok (Away off, asked by Home)"); return self.ask_finish("ok")
                 self.unlocked = True; log("PIN ok"); return self.to_on()
-            self.pin, self.msg = "", {"locked": "wrong PIN, wait %ds" % lock, "unset": "no PIN set"}.get(res, "wrong PIN")
+            counted = vpin.fails() > n0              # H3: this try was counted (not a wait that began meanwhile)
+            if counted: log("PIN wrong (%d)" % vpin.fails())   # the running count only, never digits or their number
+            if counted and res == "locked": log("PIN wait %d s" % lock)   # H3: a wait starts or lengthens
+            self.pin = ""
+            self.msg = ("no PIN set" if res == "unset" else
+                        vpin.wait_msg(lock, wrong=counted) if res == "locked" else "wrong PIN")   # H4 wording
         elif len(self.pin) < 6: self.pin, self.msg = self.pin + k, ""
         self.write_pin()
 
@@ -469,18 +688,21 @@ class Keys:
         if s == "off": self.to_glance()
         elif s == "glance": self.to_off()
         elif s == "dim": self.to_on()
-        elif s == "menu": self.tap(E.KEY_ENTER)
-        elif s == "pin":
-            if self.hl is None: self.to_off()
-            else: self.pad_key(PAD[self.hl])
+        elif s == "menu":
+            if self.menu is not None: self.tap(E.KEY_ENTER)   # F6/F7: no menu yet (waiting dark): nothing to pick
+        elif s == "pin":                                 # no highlight: Home's pad back to Home (R10), else dark
+            if self.hl is None: self.ask_finish("cancel") if self.ask else self.to_off()
+            else: self.pad_key(self.pad_names()[self.hl])
         elif s == "on":                                  # ask sway/tmux only if a key highlight exists (fast off)
             hl = [c for c in ("home", "net") if "highlight=1" in readf(UI + "/" + c)]
             if hl and self.context() in hl: self.tap(E.KEY_ENTER)
             else: self.to_off()
 
     def power_hold(self):
-        if self.state == "menu": self.tap(E.KEY_ESC)
-        else: self.to_menu()
+        if self.state == "menu":
+            if self.menu is not None: self.tap(E.KEY_ESC)
+            else: log("menu: hold while waiting for the glance: given up"); self.menu_close()   # as Esc would
+        else: self.to_menu()                             # R10: to_menu ends Home's pad first (menu over the lit shell)
 
     def volume(self, code, value):
         up, s = code == E.KEY_VOLUMEUP, self.state
@@ -490,9 +712,11 @@ class Keys:
             return
         if s == "glance": self.to_pin() if self.locked() else self.to_on()
         elif s == "dim": self.to_on()
-        elif s == "menu": self.tap(E.KEY_UP if up else E.KEY_DOWN)
+        elif s == "menu":
+            if self.menu is not None: self.tap(E.KEY_UP if up else E.KEY_DOWN)   # F6/F7: never into the shell
         elif s == "pin":
-            self.hl = (len(PAD) - 1 if up else 0) if self.hl is None else (self.hl + (-1 if up else 1)) % len(PAD)
+            n = len(self.pad_names())                    # 13 with Home's Cancel row (R10)
+            self.hl = (n - 1 if up else 0) if self.hl is None else (self.hl + (-1 if up else 1)) % n
             self.write_pin()
         elif s == "on":
             if self.context() in ("home", "net"): self.tap(E.KEY_UP if up else E.KEY_DOWN)
@@ -509,7 +733,7 @@ class Keys:
             elif self.state == "pin":
                 self.activity = time.monotonic()
                 if was and not down:                     # act on lift
-                    k = pad_hit(x, y, readf(UI + "/rotation", "normal"))
+                    k = pad_hit(x, y, readf(UI + "/rotation", "normal"), bool(self.ask))
                     if k: self.hl = None; self.pad_key(k)
             self.maybe_mute()
             return
@@ -541,16 +765,23 @@ class Keys:
             elif w[1] == "down": self.level = next((s for s in reversed(STEPS) if s < self.level), STEPS[0])
             elif w[1] == "set" and len(w) == 3 and w[2].isdigit(): self.level = max(1, min(2047, int(w[2])))
             writef(UI + "/brightness", str(self.level))
-            if self.state in ("on", "menu") or (self.state in ("glance", "pin") and not self.dark):
+            if self.state == "on" or (self.state in ("menu", "glance", "pin") and not self.dark):   # R8: dark menu
                 self.backlight(self.level)
             elif self.state == "dim": self.backlight(min(self.level, DIM_LEVEL))
         elif line == "screen off": self.to_off()
         elif line == "menu" and self.state != "menu": self.to_menu()
-        elif line == "away changed":                  # set from Home: the person holding the phone is unlocked
+        elif line == "away changed":                  # vegas-away on/off (CLI or Home): the holder is unlocked
             log("away", "on" if self.away() else "off")
-            self.unlocked = self.state in ("on", "dim", "menu")
-            if not self.away() and self.state == "pin": self.to_on()
+            # review fix: a menu from the dark (waiting or running over the glance, menu_back glance/pad) is no
+            # proof of a PIN: only the lit shell and a menu opened from it count as unlocked
+            self.unlocked = self.state in ("on", "dim") or (self.state == "menu" and self.menu_back == "on")
+            if not self.away() and self.state == "pin" and not self.ask: self.to_on()
+            elif self.locked() and self.state == "menu" and self.menu_back != "on":
+                # Away turned on under a menu from the dark that was opened as Away off (full menu, touch live):
+                # nobody entered a PIN, so it must not stay: screen off, as F7
+                log("Away on under a menu from the dark: screen off"); self.to_off()
         elif line == "glance" and self.state == "off": self.to_glance()
+        elif w[:1] == ["pin-ask"] and len(w) == 3: self.ask_start(w[1], w[2])   # R10
         else: log("ctl: unknown", line)
 
     def tick(self):
@@ -565,12 +796,25 @@ class Keys:
                 and now - self.power_down > 2.0:
             self.power_down = None                       # release lost (key device dropped while held)
         self.maybe_mute()
-        if (s in ("on", "dim") or (s == "menu" and not self.locked())) and os.path.exists(SWAY_MUTED) and now - self.unmute_try > 3:
+        if (s in ("on", "dim") or (s == "menu" and not self.locked() and not self.dark
+                                     and not self.menu_keys_only)) and os.path.exists(SWAY_MUTED) and now - self.unmute_try > 3:
             self.unmute_try = now; self.mute(False)      # the fallback unmute failed (sway hung): never stay muted lit
-        if s in ("glance", "pin"):
-            alive = self.glance is not None and self.glance.poll() is None
-            if self.dark and alive and self.mapped("vegas-glance"):
-                self.dark = False; self.backlight(self.level)   # glance window came up late (slow foot start)
+        if s in ("glance", "pin") or (s == "menu" and self.menu_back in ("glance", "pad")):
+            alive = self.glance_alive()
+            if self.dark and alive and self.mapped("vegas-glance"):   # glance window came up late (slow foot start)
+                if s == "menu" and self.menu_wait:       # R8: float it under the menu, then start the menu
+                    self.menu_over_glance(); return 0.05
+                self.dark = False; self.backlight(self.level)
+            elif s == "menu" and self.menu_wait and now - self.menu_dark_t >= MENU_DARK_MAX:
+                self.menu_failed("glance not mapped after %g s" % MENU_DARK_MAX); return 0.05   # F6/F7
+            elif s == "menu" and self.menu_glance and not alive and not self.locked() and not self.menu_keys_only:
+                # review fix (F6): Away off, the glance under the menu died: the menu now stands over the lit shell,
+                # so it goes keys only as the F6 fallback (touch muted, also against the unmute retry)
+                log("glance window gone under the menu; Away off: menu keys only (F6)")
+                self.menu_glance, self.menu_keys_only = False, True
+                self.mute_at = None; self.mute(True); return 0.05
+            elif s == "pin" and self.ask and not alive:
+                log("pad window gone: Home's PIN request cancelled"); self.ask_finish("cancel"); return 0.05
             elif not alive and self.locked() and not self.dark:
                 log("glance window gone; Away locked: screen off"); self.to_off(); return 0.05
         if self.ui is None and now - self.ui_try > 5: self.uinput_open()   # keep the keyboard on the seat
@@ -579,7 +823,8 @@ class Keys:
         if s == "on" and now - self.activity >= dim_t: self.to_dim()
         elif s in ("dim", "menu") and now - self.activity >= off_t: self.to_off()   # idle off also cancels the menu
         elif s == "glance" and now - self.entered >= T_GLANCE: self.to_off()
-        elif s == "pin" and now - self.activity >= T_PIN: self.to_off()
+        elif s == "pin" and now - self.activity >= T_PIN:   # the 30 s give-up: Home's pad back to Home (R10)
+            self.ask_finish("timeout") if self.ask else self.to_off()
         if self.power_down is not None or self.mute_at: return 0.05
         return 5.0 if s == "off" else 0.5                # off has no timers: no 2 Hz wakeups while dark
 

@@ -95,15 +95,19 @@ def failed_units(runner):
 
 def hotspot(runner):
     """{'kind': None|'wifi'|'usb', 'ssid', 'devices', 'usb'} from the tools' own status lines (both need root).
-    Both kinds can be on at once (the tools allow it); kind names the Wi-Fi one first."""
-    h = {"kind": None, "ssid": None, "devices": 0, "usb": None}
-    m = re.match(r"on: (.*), (\d+) device", runner.run(["vegas-hotspot", "status"], timeout=6).out.strip())
+    Both kinds can be on at once (the tools allow it); kind names the Wi-Fi one first. 'uplink': False when a tool
+    that is on says ", no uplink" (ruling R9: wlan0 lost its address; sharing stays on until its timer)."""
+    h = {"kind": None, "ssid": None, "devices": 0, "usb": None, "uplink": True}
+    out = runner.run(["vegas-hotspot", "status"], timeout=6).out.strip()
+    m = re.match(r"on: (.*), (\d+) device", out)
     if m:
         h.update(kind="wifi", ssid=m.group(1), devices=int(m.group(2)))
+        h["uplink"] = not out.endswith(", no uplink")
     out = runner.run(["vegas-usbshare", "status"], timeout=6).out.strip()
     if out.startswith("on"):
         h["usb"] = out
         h["kind"] = h["kind"] or "usb"
+        h["uplink"] = h["uplink"] and not out.endswith(", no uplink")
     return h
 
 

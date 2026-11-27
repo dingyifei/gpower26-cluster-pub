@@ -1,4 +1,5 @@
-"""Away PIN: hash, check, lockout (D17, Q29 own touch pad). Used by vegas-keys (pad), vegas-home and vegas-away.
+"""Away PIN: hash, check, lockout (D17, Q29 own touch pad). Used by vegas-keys (the pad: check, and set_pin for the
+first PIN Home asks for, R10) and vegas-away (the shell tool); Home only asks is_set() (R10: no PIN field on Home).
 
 PIN = 4..6 digits, stored as pbkdf2_sha256$<iter>$<salt>$<hash hex> in /etc/vegas/away-pin (root 0600); the salt is
 32 hex characters used as UTF-8 text (as vegas-keys' check_pin reads it).
@@ -6,6 +7,11 @@ Lockout: after 5 wrong tries, 30 s, doubling with each further wrong try, capped
 the counter lives in /var/lib/vegas/away-fails ("fails=<n> until=<epoch>") so a reboot does not reset it.
 CLI (vegas-away uses it): python3 -m vegasui.pin set|check|status   (PIN on stdin, one line; set takes it twice)
 Exit codes of check: 0 right, 1 wrong, 3 locked (prints the seconds left), 4 no PIN set.
+H4 (25 Nov, designer): the pad's wait wording lives here (wait_msg, is_wait_msg) so vegas-keys writes it and the glance
+colours it from one place: under 120 s "wait 30 s", from 120 s whole minutes rounded up "wait 2 min" .. "wait 60 min";
+the wrong try that starts or lengthens a wait "wrong, wait 30 s" / "wrong, wait 32 min" (<= 18 cells: the pad's
+message line). A message about a wait is drawn red, every other pad message amber. H3: fails() is the running count
+of wrong tries (it does not reset at FREE_TRIES), which vegas-keys journals as "PIN wrong (n)".
 """
 import hashlib
 import hmac
@@ -62,6 +68,27 @@ def _fails():
         return int(d.get("fails", 0)), float(d.get("until", 0))
     except (OSError, ValueError):
         return 0, 0.0
+
+
+def fails() -> int:
+    """Running count of wrong tries since the last right one (H3: vegas-keys journals it, never the digits)."""
+    return _fails()[0]
+
+
+def fmt_wait(secs: int) -> str:
+    """H4: "30 s" under 120 s, else whole minutes rounded up ("2 min" .. "60 min")."""
+    secs = max(0, int(secs))
+    return "%d s" % secs if secs < 120 else "%d min" % -(-secs // 60)
+
+
+def wait_msg(secs: int, wrong: bool = False) -> str:
+    """H4: the pad's message for a wait in force; wrong=True for the try that started or lengthened it."""
+    return ("wrong, wait " if wrong else "wait ") + fmt_wait(secs)
+
+
+def is_wait_msg(msg: str) -> bool:
+    """H4: True for a message wait_msg() made (the glance draws those red)."""
+    return (msg or "").startswith(("wait ", "wrong, wait "))
 
 
 def locked_for() -> int:

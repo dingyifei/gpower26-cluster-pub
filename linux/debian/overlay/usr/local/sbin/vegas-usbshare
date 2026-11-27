@@ -8,6 +8,10 @@
 # nftables first, times out ("Could not enable IP masquerading: Connection timed out") and marks usb0 failed.
 # The Mac keeps its own default route: macOS adds the USB router as a scoped route only (curl --interface en19).
 # usb0 is the SSH lifeline: changing its DHCP offer briefly reconfigures it (existing SSH sessions survive).
+# Ruling R9 (25 Nov): `on` refuses while the uplink has no IPv4 address: stays off, exits 1, prints exactly
+# "Not connected: nothing to share. Join a network first." (as vegas-hotspot). If the uplink goes while sharing is
+# on, it stays on and `status` ends in ", no uplink" (Network says it in amber).
+# R13: on/off signal the strip (the "AP usb" badge at once).
 set -eu
 NET=172.16.42.0/24 F=/run/systemd/network/05-usb0-share.network
 IPT=iptables-legacy; command -v $IPT >/dev/null || { echo "vegas-usbshare: needs the iptables package" >&2; exit 1; }
@@ -25,20 +29,26 @@ rules() {  # $1 = -A (add, if missing) or -D (delete, if present); order matters
 }
 other_nat() { $IPT -t nat -S POSTROUTING 2>/dev/null | grep -v -- "-s $NET " | grep -q MASQUERADE; }  # the hotspot's
 reconf() { networkctl reload; networkctl reconfigure usb0; }
+uplink() { case "$(ip -4 -o addr show dev "$UP" 2>/dev/null)" in *" inet "*) return 0 ;; esac; return 1; }   # R9
+# R13: SIGUSR1 to the strip feed (the pid it wrote, only while that pid is still `vegas-status --bar`): the badge now
+strip() { _p=$(cat /run/vegas-ui/strip.pid 2>/dev/null) || return 0; case $_p in ''|*[!0-9]*) return 0 ;; esac
+  _a=" $(tr '\0' ' ' < /proc/$_p/cmdline 2>/dev/null) "   # whole argv words, as uictl.poke_strip: never --bar-once
+  case $_a in *"vegas-status "*) case $_a in *" --bar "*) kill -USR1 "$_p" 2>/dev/null ;; esac ;; esac; return 0; }
 case "${1:-status}" in
   on)  [ -e "$F" ] && { echo "vegas-usbshare: already on (uplink $UP)"; exit 0; }
        UP=${VEGAS_UPLINK:-wlan0}; [ -e "/sys/class/net/$UP" ] || { echo "vegas-usbshare: no $UP (Wi-Fi off?)" >&2; exit 1; }
+       uplink || { echo "Not connected: nothing to share. Join a network first." >&2; exit 1; }   # R9: stays off
        dns=$(resolvectl dns "$UP" 2>/dev/null | sed 's/^[^:]*://' | tr ' ' '\n' | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -3 | paste -sd' ' -)
        dns=${dns:-1.1.1.1}
        mkdir -p "${F%/*}"
        { printf '# written by vegas-usbshare (until reboot)\n# uplink=%s\n' "$UP"
          sed -e "s/^EmitDNS=no/EmitDNS=yes\nDNS=$dns/" -e 's/^EmitRouter=no/EmitRouter=yes/' /etc/systemd/network/10-usb0.network
        } > "$F.new" && mv "$F.new" "$F"
-       rules -A; echo 1 > /proc/sys/net/ipv4/ip_forward; reconf
+       rules -A; echo 1 > /proc/sys/net/ipv4/ip_forward; reconf; strip
        echo "USB sharing on via $UP, DNS $dns (the computer must renew its DHCP lease to get the route)" ;;
-  off) rm -f "$F"; rules -D; other_nat || echo 0 > /proc/sys/net/ipv4/ip_forward; reconf; echo "USB sharing off" ;;
+  off) rm -f "$F"; rules -D; other_nat || echo 0 > /proc/sys/net/ipv4/ip_forward; reconf; strip; echo "USB sharing off" ;;
   status) if [ -e "$F" ] && $IPT -t nat -C POSTROUTING -s $NET -o "$UP" -j MASQUERADE 2>/dev/null; then
-            echo "on via $UP ($($IPT -t nat -L POSTROUTING -v -n -x | awk '/MASQUERADE/ && /172\.16\.42/ {print $2" bytes out"; exit}'))"
+            echo "on via $UP ($($IPT -t nat -L POSTROUTING -v -n -x | awk '/MASQUERADE/ && /172\.16\.42/ {print $2" bytes out"; exit}'))$(uplink || echo ", no uplink")"
           else echo off; fi ;;
   *) echo "usage: vegas-usbshare on|off|status" >&2; exit 2 ;;
 esac

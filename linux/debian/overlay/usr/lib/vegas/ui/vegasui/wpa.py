@@ -18,6 +18,10 @@ join short) and the old network is back by 38 + ~2 s start + 18 s = ~58 s at wor
 vegas-net is itself going back is harmless: both select the old network. If the timer fires with the
 record still there, heal() puts the old network back. A respawned vegas-net heals at start too (heal(at_start=True)),
 and runs enable_network all every start.
+
+Scan ages (R12, F4): Wpa.bss_ages() reads one age per BSS (BSS RANGE=ALL MASK=0x203) and scan_results() lists every
+BSS of an SSID under 'bssids', so vegas-net can give each row the age of its network's freshest BSS and show the
+median over the rows on screen (net.py, F4).
 """
 import hashlib
 import json
@@ -272,8 +276,40 @@ class Wpa:
     def scan(self) -> bool:
         return self.cmd("scan").last in ("OK", "FAIL-BUSY")
 
+    def bss_ages(self):
+        """Rulings R12/F4: {bssid (lower case): seconds since a scan last saw it} for every entry of wpa_supplicant's
+        BSS table, whoever asked for that scan (wpa_supplicant's own scans, wpa_cli, us). BSS RANGE=ALL MASK=0x203
+        (WPA_BSS_MASK_ID|BSSID|AGE) prints "id=", "bssid=", "age=" per entry; entries are split on "id=" so the
+        field order inside one does not matter. The age counts from the time the driver saw the BSS (nl80211
+        seen-ms-ago), so a stale cached entry is not counted as fresh. {} = empty table; None = no answer or an old
+        wpa_supplicant (FAIL, UNKNOWN COMMAND). The reply is cut at wpa_supplicant's 4 KiB buffer (~100 entries at
+        ~40 bytes each, scan_results itself stops at ~55 lines): a BSS without an age is left out of the median."""
+        r = self.cmd("bss", "RANGE=ALL", "MASK=0x203")
+        if not r.ok:
+            return None
+        out, ages, cur = r.out, {}, {}
+        for line in out.splitlines() + ["id=end"]:
+            k, sep, v = line.strip().partition("=")
+            if not sep:
+                continue
+            if k == "id":
+                if "bssid" in cur and cur.get("age", "").isdigit():
+                    ages[cur["bssid"].lower()] = int(cur["age"])
+                cur = {}
+            elif k in ("bssid", "age"):
+                cur[k] = v
+        if ages or not out.strip():
+            return ages
+        return None
+
+    def list_age(self):
+        """Age of the freshest entry of the BSS table (R12 before F4); None = empty table or no answer."""
+        ages = self.bss_ages()
+        return min(ages.values()) if ages else None
+
     def scan_results(self) -> list:
-        """Networks in range, strongest BSS per SSID, strongest first, hidden SSIDs left out."""
+        """Networks in range, strongest BSS per SSID, strongest first, hidden SSIDs left out. 'bssids': every BSS of
+        that SSID in the table (F4: a row's age is the age of its freshest BSS)."""
         best = {}
         for line in self.cmd("scan_results").out.splitlines():
             f = line.split("\t")
@@ -286,8 +322,11 @@ class Wpa:
                 freq, dbm = int(f[1]), int(f[2])
             except ValueError:
                 continue
+            seen = best[ssid]["bssids"] if ssid in best else []
+            seen.append(f[0].strip().lower())
             if ssid not in best or dbm > best[ssid]["dbm"]:
-                best[ssid] = {"ssid": ssid, "freq": freq, "dbm": dbm, "flags": f[3], "sec": security(f[3])}
+                best[ssid] = {"ssid": ssid, "freq": freq, "dbm": dbm, "flags": f[3], "sec": security(f[3]),
+                              "bssids": seen}
         return sorted(best.values(), key=lambda n: -n["dbm"])
 
     # --- changing ----------------------------------------------------------------------------------------------

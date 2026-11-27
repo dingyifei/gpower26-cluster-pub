@@ -40,10 +40,16 @@ do_row() {
 }
 
 # -s: rows start at the left edge (by default bemenu indents them by the prompt's width, which pushed them off a
-# 360-wide screen); --cw 1 --ch 1: the (unused) filter field's text cursor shrinks to a dot; prompt <= 27 chars at 15 pt
+# 360-wide screen); --cw 1 --ch 1: the (unused) filter field's text cursor shrinks to a dot, drawn after the prompt.
+# R16 (25 Nov, final): a title (prompt line) is 27 characters at most. The full menus read "Vol keys move · Power
+# picks" (27), the Away ("short") menu "Keys only: Vol, then Power" (26). Nothing was cut at #5's right edge: the
+# stray "·" seen there is that cursor dot, drawn after the prompt. R16 trial (VM, 25 Nov): bemenu 0.6.15 takes --cw 0
+# as "default width", not zero: a wide bar after the title (to x 1067 of 1080), so --cw 1 stays. VEGAS_MENU_CW: test
+# hook for that trial only.
+# bemenu 0.6.15 always uses the layer-shell TOP layer (no option); vegas-keys puts the glance under it (R8).
 pick() {  # $1 = prompt, $2 = line height, rest = rows; prints the row, fails on cancel or anything not in the list
   local prompt=$1 h=$2 sel; shift 2
-  sel=$(printf '%s\n' "$@" | BEMENU_BACKEND=wayland bemenu -l "$#" -b -W 1.0 -H "$h" -p "$prompt" -s --cw 1 --ch 1 \
+  sel=$(printf '%s\n' "$@" | BEMENU_BACKEND=wayland bemenu -l "$#" -b -W 1.0 -H "$h" -p "$prompt" -s --cw "${VEGAS_MENU_CW:-1}" --ch 1 \
         --fn 'JetBrains Mono 15' --tb '#0F151C' --tf '#F0B429' --fb '#0F151C' --ff '#D5DBE3' \
         --nb '#0F151C' --nf '#D5DBE3' --ab '#0F151C' --af '#D5DBE3' --hb '#F0B429' --hf '#1C1400' \
         --sb '#F0B429' --sf '#1C1400') || return 1
@@ -63,12 +69,13 @@ case $variant in
   *) echo "usage: vegas-menu [--run] [full|full-prog|short] [upright|landscape|auto] | --do <row>" >&2; exit 2 ;;
 esac
 command -v bemenu >/dev/null || { echo "vegas-menu: bemenu is not installed" >&2; exit 1; }
-row=$(pick 'Vol keys move · Power picks' $h "${rows[@]}") || exit 1
+title='Vol keys move · Power picks'; [ "$variant" = short ] && title='Keys only: Vol, then Power'   # R16
+row=$(pick "$title" $h "${rows[@]}") || exit 1
 [ "$row" = Cancel ] && exit 1
 if [ "$row" = "Power off" ]; then
   # Confirm list: rows "Power off now" and "Cancel". With a charger present (designer ruling 2, 23 Nov) the warning
-  # "Cable in: charges to full" (25 characters, fits 360 px at 15 pt like the 27-character main prompt) is the
-  # prompt line itself, in amber (--tf), instead of a third row.
+  # "Cable in: charges to full" (25 characters, within R16's 27) is the prompt line itself, in amber (--tf),
+  # instead of a third row.
   prompt='Power off the phone?'
   [ "$(cat ${VEGAS_SYSROOT:-}/sys/class/power_supply/primary_chg/online 2>/dev/null)" = 1 ] && prompt='Cable in: charges to full'
   row=$(pick "$prompt" $h "Power off now" "Cancel") || exit 1

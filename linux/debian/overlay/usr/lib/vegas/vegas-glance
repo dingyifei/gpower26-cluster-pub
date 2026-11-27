@@ -5,9 +5,46 @@ vegas-keys runs /usr/lib/vegas/vegas-glance on every wake and kills that pid on 
 (same pid) its own window:  foot -a vegas-glance -o 'font=JetBrains Mono:size=22.5' -o pad=0x0 ... vegas-glance --draw
 sway rule: for_window [app_id="vegas-glance"] floating enable, fullscreen enable, border none
 It only draws: it reads no input (touch stays muted; vegas-keys hit-tests the pad with vegasui.pad and writes the pad
-state to /run/vegas-ui/pin as "n=<digits entered> max=6 hl=<index|-> msg=<text>"). Shows the pad while
-/run/vegas-ui/state is "pin", else the glance. Publishes its real cell geometry to /run/vegas-ui/glance-geom.
+state to /run/vegas-ui/pin as "n=<digits entered> max=6 hl=<index|-> ask=<-|off|set|again> msg=<text>"). Shows the
+pad while /run/vegas-ui/state is "pin", else the glance. Publishes its real cell geometry to /run/vegas-ui/glance-geom.
+R11 (25 Nov): the PIN line shows filled dots only, one per digit entered (never more than 6, no empty slots), and
+"PIN" alone before the first digit. R10: a pad Home asked for (ask= off: Away off; set / again: the first PIN, entered
+twice) has the fifth Cancel row (vegasui.pad cancel=True) and a title line instead of the clock line ("TURN AWAY OFF",
+"NEW AWAY PIN", "SAME PIN AGAIN"). F8 (25 Nov, follow-on; replaces R11's hint lines): the hint has no lines of its
+own: while a PIN is being set (ask set / again) and nothing is typed yet, a dim "4 to 6 digits" stands on the PIN line
+where the dots go, and the first digit replaces it. vegas-keys' message (wrong PIN, wait, not the same PIN) takes one
+line under the PIN line (cut to the text column; its margins give way first); when that message is the hint's own
+"4 to 6 digits" (OK pressed too early) the PIN line reads "PIN" alone, so it is not shown twice. The rows won back go to the pad
+(vegasui.pad: a free row under Cancel, also in landscape).
+G4 (25 Nov, second follow-on; landscape only, upright unchanged): the digit pad on the right is the Away pad's, every
+gap kept; Cancel is drawn in the left text column under the text block (#5's 44 x 9: rows 6-7, row 8 free). The text
+column (and Cancel) starts at vegasui.pad.text_cols()'s first column, pad.hole_cols() (2 on #5), so neither touches
+the camera hole on the left short edge at mid-height (transform 90); landscape text is cut so line()'s own margin
+never gives way. Keys are drawn left to right per row (Cancel now precedes the digit keys on its rows); on a tiny
+landscape grid where Cancel lands on a text row, the key is drawn and that text row is not (upright frames unchanged).
+R8: while the power menu is open over the dark side, vegas-keys takes this window out of fullscreen (an output-sized
+floating window, so bemenu's top layer draws above it) and puts it back after; foot runs with resize-by-cells=no so
+that floating window is exactly the output's size, never a few pixels short (cell-rounded) with the shell showing.
+H2 (25 Nov, after G4-G6): the landscape GLANCE (not only the pad) leaves the camera-hole columns on both short edges
+blank (pad.hole_cols(): columns 0-1 and 42-43 on #5's 44 x 9; the hole is left at rotation 90, right at 270, row 4)
+and starts its text at column 2 like the pad. Its two blocks are laid out without line()'s margin cell inside the
+text area columns hole_cols .. cols-1-hole_cols (40 on #5): block A left-aligned at column 2, block B right-aligned to
+column 41, each 19 cells, 2 blank columns between (was: margins at 0 and 23, B reaching column 42). A line longer than
+its block (an address of 15 characters, "paused: warm 70-80%") takes the gap first (1 column kept), and the hole
+row (4: charger / ssh) always fits. The crowded R9 fold ("hotspot usb  no uplink", 21 cells) no longer fits a 19-cell
+block in landscape and reads "hotspot  no uplink" there (the kind gives way, as at narrow widths before).
+H5 (26 Nov, designer): when the charge word and its band do not fit the row, the band gives way and the word stands
+alone, in its colour (glance only, upright and landscape; the word itself is never shortened: strip, Home and glance
+share charge.word's words). Today that is only "no charge control" (17 cells; with "70-80%" it was 24 cells at 20
+columns upright and pushed landscape row 3 two cells past the edge); every other word fits with bands up to "95-100%"
+("paused: warm 95-100%": by the margin upright, by H2's gap rule in landscape). H2's "runs on to the right" fallback
+is gone: no glance row is longer than its width, and landscape text stays inside columns 2-41 on #5's 44 x 9.
+H4 (25 Nov): every pad message about a wait in force (vegasui.pin.is_wait_msg: "wait 30 s", "wrong, wait 32 min") is
+drawn red (REDC), the others ("wrong PIN", "not the same PIN", "4 to 6 digits", "PIN not saved", "no PIN set", "PIN
+check missing") amber, upright and landscape. All are <= 18 cells, inside the message room of both (20).
 Redraws only when something shown changes; no seconds, no blinking cursor. --once prints one frame (tests, SSH).
+Sharing (Wi-Fi hotspot or USB) with no IPv4 address on wlan0 adds an amber "no uplink" under the hotspot line (R9),
+folded into that line when landscape has no row to spare.
 Values: read through vegasui.readers/charge and formatted with the same helpers as the strip, Home and the report
 (B3), so the glance can never disagree with them. Test hook: VEGAS_SYSROOT (inherited from vegas-keys in the VM).
 """
@@ -21,6 +58,10 @@ import time
 
 sys.path.insert(0, os.environ.get("VEGAS_UI_LIB", "/usr/lib/vegas/ui"))
 from vegasui import pad, readers as R, charge       # noqa: E402  (B3: the same readers as strip, Home and report)
+try:
+    from vegasui.pin import is_wait_msg            # noqa: E402  (H4: the wait wording's own test, next to wait_msg)
+except ImportError:                                 # pragma: no cover  (an old vegasui: amber as before)
+    def is_wait_msg(_msg): return False
 
 BG, FG, DIMC, AMBERC, REDC, GREENC = "0B0F14", "D5DBE3", "7F8B99", "F0B429", "FF6B63", "7BD389"
 BTN, QUIET, INK = "2B3746", "17202A", "1C1400"
@@ -60,13 +101,14 @@ class Seg:
         return fg(self.color, self.text, self.bold)
 
 
-def line(width, left, right=()):
+def line(width, left, right=(), margin=True):
     """1-space margin, left segments, right segments ending at column width-1. Too long: padding goes first, then
-    the margin; values are never cut short (addresses)."""
+    the margin; values are never cut short (addresses). margin=False (H2, landscape glance blocks): no margin cell at
+    all, right segments end at column width (the caller places the block)."""
     left, right = [s if isinstance(s, Seg) else Seg(s) for s in ([left] if isinstance(left, (str, Seg)) else left)], \
                   [s if isinstance(s, Seg) else Seg(s) for s in ([right] if isinstance(right, (str, Seg)) else right)]
     used = sum(map(len, left)) + sum(map(len, right))
-    margin = 1 if used + 2 <= width else 0
+    margin = 1 if margin and used + 2 <= width else 0
     gap = max(1 if right else 0, width - 1 - margin - used) if margin else max(1 if right else 0, width - used)
     plain_w = margin + used + gap
     return " " * margin + "".join(s.render() for s in left) + " " * gap + "".join(s.render() for s in right), plain_w
@@ -94,46 +136,73 @@ def gather(with_tools=True):
     }
 
 
-def glance_blocks(d, w):
-    """Two blocks of (text, width) lines: battery/processor, network/root (stacked upright, side by side wide)."""
+def word_line(d, w, room=None, margin=True):
+    """The charge word and its band: (text, width). H5: the band gives way when word, one blank and band need more
+    than room cells (default w: upright, line()'s margin gives way first); the word is never shortened."""
+    word = Seg(d["word"], role(d["role"]))
+    if len(d["word"]) + 1 + len(d["band"]) <= (w if room is None else room):
+        return line(w, word, d["band"], margin=margin)
+    return line(w, word, margin=margin)
+
+
+WORD_ROW = 2                               # the charge word's line in block A (H5)
+
+
+def glance_blocks(d, w, room=None, margin=True, word_room=None):
+    """Two blocks of (text, width) lines: battery/processor, network/root (stacked upright, side by side wide).
+    room: the rows block B may use (wide); the R9 "no uplink" line folds into the hotspot line rather than push the
+    root/away line (B5) off the screen. margin=False: lines without line()'s margin cell (H2, landscape).
+    word_room: the cells the charge word line may take (H5; default w)."""
+    def ln(*a):
+        return line(w, *a, margin=margin)
     b = d["bat"]
     cap = "?" if b["cap"] is None else f"{b['cap']}%"
     t, soc = b["temp"], d["soc"]
     ctext, crole = R.charger(b["online"])
     A = [
-        line(w, [Seg(d["now"], FG, True)], [Seg(d["date"], DIMC)]),
-        line(w, Seg("BATTERY", DIMC), Seg(cap, role(R.bat_level_role(b["cap"])))),
-        line(w, Seg(d["word"], role(d["role"])), d["band"]),
-        line(w, Seg(ctext, role(crole)), R.fmt_amps(b["amps"])),
-        line(w, Seg("temperature", DIMC), Seg(R.fmt_deg(t, space=False), role(R.bat_temp_role(t, d["word"])))),
-        line(w, Seg("PROCESSOR", DIMC), Seg(R.fmt_deg(soc, space=False), role(R.soc_temp_role(soc)))),
-        line(w, Seg("no cap") if d["cap"] >= 100 else Seg(f"cap {d['cap']} %", role(R.cap_role(d["cap"])))),
+        ln([Seg(d["now"], FG, True)], [Seg(d["date"], DIMC)]),
+        ln(Seg("BATTERY", DIMC), Seg(cap, role(R.bat_level_role(b["cap"])))),
+        word_line(d, w, word_room, margin),                                  # A[WORD_ROW]
+        ln(Seg(ctext, role(crole)), R.fmt_amps(b["amps"])),
+        ln(Seg("temperature", DIMC), Seg(R.fmt_deg(t, space=False), role(R.bat_temp_role(t, d["word"])))),
+        ln(Seg("PROCESSOR", DIMC), Seg(R.fmt_deg(soc, space=False), role(R.soc_temp_role(soc)))),
+        ln(Seg("no cap") if d["cap"] >= 100 else Seg(f"cap {d['cap']} %", role(R.cap_role(d["cap"])))),
     ]
     wi, us = d["wifi"], d["usb"]
     B = [
-        line(w, Seg("NETWORK", DIMC)),
-        line(w, "wifi", Seg(wi["ip"], FG) if wi["up"] else Seg("down", DIMC)),
-        line(w, "usb", Seg(us["ip"]) if us["link"] else Seg("no link", AMBERC)),
-        line(w, "ssh", f"{d['ssh']} session" + ("" if d["ssh"] == 1 else "s")),
+        ln(Seg("NETWORK", DIMC)),
+        ln("wifi", Seg(wi["ip"], FG) if wi["up"] else Seg("down", DIMC)),
+        ln("usb", Seg(us["ip"]) if us["link"] else Seg("no link", AMBERC)),
+        ln("ssh", f"{d['ssh']} session" + ("" if d["ssh"] == 1 else "s")),
     ]
     h = d["hot"]
     if h and h["kind"]:
         n = h.get("devices")
-        B.append(line(w, Seg(f"hotspot {h['kind']}", AMBERC),
-                      ("?" if n is None else str(n)) if h["kind"] == "wifi" else ""))
+        B.append(ln(Seg(f"hotspot {h['kind']}", AMBERC),
+                    ("?" if n is None else str(n)) if h["kind"] == "wifi" else ""))
+        if not wi["up"]:     # R9: sharing that lost wlan0's address stays on until its timer (as the tools' status)
+            B.append(ln(Seg("  no uplink", AMBERC)))
+    extra = int(bool(d["rescue"])) + int(bool(d.get("away_open"))) + 1     # lines still to come, root line included
+    if h and h["kind"] and not wi["up"] and room is not None and len(B) + extra > room:
+        # R9, wide with no room (landscape: 9 rows): one line "hotspot usb  no uplink" ("hotspot  no uplink" when
+        # the kind does not fit beside it: always so in H2's 19-cell landscape blocks); the device count gives way,
+        # the root/away line stays
+        B.pop()
+        head = f"hotspot {h['kind']}" if len(h["kind"]) + 18 <= w else "hotspot"   # 8 + kind + 1 + 9
+        B[-1] = ln(Seg(head, AMBERC), Seg("no uplink", AMBERC))
     if d["rescue"]:
-        B.append(line(w, Seg("rescue pending", AMBERC)))
+        B.append(ln(Seg("rescue pending", AMBERC)))
     if d.get("away_open"):   # B1: Away on, but SSH could not be closed on Wi-Fi: say so in red (17 cells, fits 20)
-        B.append(line(w, Seg("SSH OPEN on Wi-Fi", REDC, True)))
+        B.append(ln(Seg("SSH OPEN on Wi-Fi", REDC, True)))
     # last line: the root word stays; Away adds an amber "away" after it (B5): "main away   up 3d"
     rc = AMBERC if d["root"] != "main" else FG
     who = [Seg(d["root"], rc), Seg(" "), Seg("away", AMBERC)] if d["away"] else [Seg(f"{d['root']} root", rc)]
-    B.append(line(w, who, f"up {d['up']}"))
+    B.append(ln(who, f"up {d['up']}"))
     return A, B
 
 
 def read_pin():
-    """Pad state written by vegas-keys: (entered, max, highlighted index or None, message)."""
+    """Pad state written by vegas-keys: (entered, max, highlighted index or None, message, ask mode or None)."""
     raw = read("/run/vegas-ui/pin", "") or ""
     head, _, msg = raw.partition(" msg=")
     kv = dict(p.split("=", 1) for p in head.split() if "=" in p)
@@ -143,33 +212,65 @@ def read_pin():
         except ValueError:
             return dflt
     hl = kv.get("hl", "-")
-    return num("n", 0), num("max", 6), int(hl) if hl.isdigit() else None, msg.strip()
+    ask = kv.get("ask", "-")
+    return (num("n", 0), num("max", 6), int(hl) if hl.isdigit() else None, msg.strip(),
+            ask if ask in ("off", "set", "again") else None)
+
+
+ASK_TITLE = {"off": "TURN AWAY OFF", "set": "NEW AWAY PIN", "again": "SAME PIN AGAIN"}   # R10: <= 18 cells
+HINT = "4 to 6 digits"                                    # F8: on the PIN line while setting, before the first digit
+
+
+def msg_colour(msg):
+    """H4: a wait in force is red, every other pad message amber."""
+    return REDC if is_wait_msg(msg) else AMBERC
 
 
 def pin_frame(d, cols, rows):
     """Rows of the PIN pad view: text block top (left when wide), keys from vegasui.pad."""
-    n, mx, hl, msg = read_pin()
-    keys = pad.layout(cols, rows)
-    tw = keys[0][2] - 1 if cols >= 40 else cols               # text column width
-    b = d["bat"]
-    cap = f"{'?' if b['cap'] is None else b['cap']}%"
-    state = f"{cap} {d['word']}"
-    if len("AWAY") + 1 + len(state) > tw:   # e.g. "100% no charge control" at 20 columns: keep the number only
-        state = cap
-    text = [
-        ("", 0),
-        line(tw, [Seg(d["now"], FG, True)], [Seg(d["date"], DIMC)]),
-        line(tw, Seg("AWAY", REDC if d.get("away_open") else AMBERC), state),   # red: SSH open on Wi-Fi (B1)
-        line(tw, Seg("PIN", DIMC), " ".join("●" * min(n, mx) + "○" * max(0, mx - n))),
-        line(tw, Seg(msg[:tw], AMBERC)) if msg else ("", 0),
-    ]
+    n, mx, hl, msg, ask = read_pin()
+    keys = pad.layout(cols, rows, cancel=ask is not None)
+    wide = cols >= 40
+    lo, hi = pad.text_cols(cols)          # G4: landscape text starts at pad.hole_cols() (clear of the camera hole)
+    lead = " " * (lo - 1)                 # line() adds its own 1-cell margin
+    tw = hi - lo + 3                      # line() width: text cells lo..hi (upright: lo 1, tw = cols, as before)
+    room = tw - 2 if wide else tw         # G4: landscape cuts text so line()'s margin never gives way (hole side)
+    dots = " ".join("●" * min(n, mx))                          # R11: filled dots only, one per digit entered
+    if n:
+        pin_line = line(tw, Seg("PIN", DIMC), dots)
+    elif ask in ("set", "again") and msg != HINT:             # F8: the hint where the dots will go (not twice:
+        #                                                        vegas-keys' own "4 to 6 digits" after a short OK)
+        pin_line = line(tw, Seg("PIN", DIMC), Seg(HINT, DIMC))
+    else:
+        pin_line = line(tw, Seg("PIN", DIMC))                  # R11: "PIN" alone at first
+    if ask:                                                    # R10: Home asked: title, PIN, message
+        # no clock here: "SAME PIN AGAIN 17:29" needs 21 cells at 20 columns. F8: 4 text rows (blank, title, PIN,
+        # message), the 5th row free above the keys (vegasui.pad starts them at row 5 upright on 20+ rows)
+        text = [("", 0), line(tw, Seg(ASK_TITLE[ask], AMBERC, True)), pin_line]
+        if msg:
+            text.append(line(tw, Seg(msg[:room], msg_colour(msg))))
+    else:
+        b = d["bat"]
+        cap = f"{'?' if b['cap'] is None else b['cap']}%"
+        state = f"{cap} {d['word']}"
+        if len("AWAY") + 1 + len(state) > room:   # e.g. "100% no charge control" at 20 columns: keep the number only
+            state = cap
+        text = [
+            ("", 0),
+            line(tw, [Seg(d["now"], FG, True)], [Seg(d["date"], DIMC)]),
+            line(tw, Seg("AWAY", REDC if d.get("away_open") else AMBERC), state),   # red: SSH open on Wi-Fi (B1)
+            pin_line,
+            line(tw, Seg(msg[:room], msg_colour(msg))) if msg else ("", 0),
+        ]
     out = []
     for r in range(rows):
         s, used = text[r] if r < len(text) else ("", 0)
-        row, col = (s + " " * max(0, tw - used), tw) if used else ("", 0)
-        for i, label, x, y, kw, kh in keys:
+        if wide and any(y <= r < y + kh and x < lo - 1 + tw for _i, _l, x, y, _w, kh in keys):
+            used = 0                          # G4: a tiny landscape grid put Cancel on a text row: the key wins
+        row, col = (lead + s + " " * max(0, tw - used), lo - 1 + tw) if used else ("", 0)
+        for i, label, x, y, kw, kh in sorted(keys, key=lambda k: k[2]):   # left to right (G4: Cancel on the left)
             if y <= r < y + kh:
-                colour = AMBERC if i == hl else (QUIET if i in (pad.BACK, pad.OK) else BTN)
+                colour = AMBERC if i == hl else (QUIET if i in (pad.BACK, pad.OK, pad.CANCEL) else BTN)
                 ink = INK if i == hl else FG
                 lab = (label if r == y else "").center(kw)
                 row += " " * max(0, x - col) + bgc(colour) + fg(ink, lab, True)[:-4] + "\x1b[0m"
@@ -183,17 +284,35 @@ def frame(d, cols, rows, mode):
         return pin_frame(d, cols, rows)
     wide = cols >= 40
     if wide:
-        half = (cols - 2) // 2
-        A, B = glance_blocks(d, half)
-        lines = [""]
-        for i in range(max(len(A), len(B))):
-            a = A[i] if i < len(A) else ("", 0)
-            b = B[i] if i < len(B) else ("", 0)
-            lines.append(a[0] + " " * max(0, half - a[1]) + "  " + b[0])
+        lines = [""] + wide_rows(d, cols, rows - 1)        # 1 blank row on top
     else:
         A, B = glance_blocks(d, cols)
         lines = [""] + [s for s, _ in A] + [s for s, _ in B]   # 1 blank row ≈ 150 px top padding (camera band)
     return (lines + [""] * rows)[:rows]
+
+
+GAP = 2                                    # H2: blank columns between the landscape blocks
+
+
+def wide_rows(d, cols, room):
+    """H2: the landscape glance's rows, text only in columns m .. cols-1-m (m = pad.hole_cols(), 2 on #5: the camera
+    hole's columns on both short edges stay blank). A left-aligned at column m, B right-aligned to column cols-1-m,
+    GAP blank columns between; a block line longer than its share takes the gap (one column kept). H5: nothing runs
+    on to the right any more: the charge word's band gives way when the word line would not fit beside block B's
+    line on its row (only "no charge control" today); every other line fits #5's 19-cell blocks plus the gap."""
+    m = pad.hole_cols(cols)
+    area = cols - 2 * m                            # 40 on #5
+    bw = (area - GAP) // 2                         # 19
+    A, B = glance_blocks(d, bw, room=room, margin=False, word_room=bw + GAP - 1)
+    if len(B) > WORD_ROW and A[WORD_ROW][1] + 1 + B[WORD_ROW][1] > area:     # B's line there is wider than its block
+        A[WORD_ROW] = word_line(d, bw, area - 1 - B[WORD_ROW][1], margin=False)
+    out = []
+    for i in range(max(len(A), len(B))):
+        a, aw = A[i] if i < len(A) else ("", 0)
+        b, w_b = B[i] if i < len(B) else ("", 0)
+        gap = max(1 if aw and w_b else 0, area - aw - w_b)
+        out.append(" " * m + a + " " * gap + b)
+    return out
 
 
 def term_geom():
@@ -225,6 +344,7 @@ def mtime(path):
 
 
 FOOT = ["foot", "-a", "vegas-glance", "-o", "font=JetBrains Mono:size=22.5", "-o", "pad=0x0", "-o", "dpi-aware=no",
+        "-o", "resize-by-cells=no",                     # R8: floating under the menu = exactly the output's size
         "-o", "cursor.blink=no", "-o", f"colors.background={BG}", "-o", f"colors.foreground={FG}"]
 
 
@@ -259,7 +379,10 @@ def main():
             mode = mode_arg or ("pin" if st[0] == "pin" else "glance")
             out = frame(data, geom[0], geom[1], mode)
             if out != last or st != stamp:
-                sys.stdout.write("\x1b[H" + "\r\n".join(s + "\x1b[K" for s in out))
+                # erase each line first (2K), never after it: with autowrap off the cursor stays ON the last column
+                # after a full-width row, and a trailing erase-to-end took that cell (the pad's right keys and the
+                # Cancel row lost their last column in the VM shots, 25 Nov)
+                sys.stdout.write("\x1b[H" + "\r\n".join("\x1b[2K" + s for s in out))
                 sys.stdout.flush()
                 last, stamp = out, st
             time.sleep(0.15 if mode == "pin" else 0.5)

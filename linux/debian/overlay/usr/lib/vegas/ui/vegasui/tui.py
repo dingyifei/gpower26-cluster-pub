@@ -9,6 +9,18 @@ Slow work (commands) runs in threads via VegasApp.bg(); the UI never blocks on a
 Screen dark (ruling B6): the 10 s refresh (VegasApp.tick) is skipped while /run/vegas-ui/state says off (one file
 read, no fork); when vegas-keys writes another state the page refreshes once at once (inotify on /run/vegas-ui;
 without inotify, a 2 s file read while dark).
+Screen back (ruling G5, 25 Nov): the page is told (VegasApp.screen_back) when the screen comes back, i.e. vegas-keys'
+state goes to "on" from off, glance or pin (a wake, or the glance or the PIN pad closing; H1: not dim). "menu" does
+not count as a state of its own here: a menu opened over a dark screen and closed to "on" is a wake, one opened and
+closed with the screen on is not ([BUILDER CHOICE]: the menu is transparent; the state before it decides). Seen from
+the same inotify event as the refresh above; without inotify, at the 2 s poll while dark and at the 10 s tick. Network
+uses it for "Network comes to the front" (net.py, G5), with VegasApp.screen_on (the last state seen is on) to hold
+back a window selected while the screen is away until the screen comes back (one event per visit).
+H1 (25 Nov, G5 correction): "on" after DIM is not the screen coming back. Dim is left by any input, usually a touch
+on the list, and a re-sort then could put another row under the finger. Dim is a lit screen for G5: screen_on is True
+while dimmed, so a window selected while dimmed is an event at the selection (a window switch is not a tap on a row)
+and the return to "on" after it adds nothing. Menu stays transparent: dim, menu, on is a return from dim (no event);
+off, menu, on is still a wake. Only off, glance and pin are away (SCREEN_BACK_FROM).
 Layout (ruling R2, 24 Nov): upright, the rows a page does not need go between its read-only block and its first
 button group (VegasApp.fit grows the page's FLEX widget: Home's #gap, Network's in-range list), so the buttons sit at
 the bottom within thumb reach and the message line is the last line. Landscape (.wide) keeps its own layout.
@@ -35,6 +47,7 @@ from . import uictl
 from .host import P, Runner
 from .theme import AMBER, BG, BUTTON, DIM, GREEN, INK, RED, ROW, STRIP, TEXT
 
+SCREEN_BACK_FROM = ("off", "glance", "pin")    # G5: "on" after one of these = the screen came back (H1: not dim)
 ROLE = {"ok": GREEN, "warn": AMBER, "limit": RED, "dim": DIM, None: TEXT}
 
 CSS = f"""
@@ -276,6 +289,7 @@ class VegasApp(App):
         self.stale = False          # a refresh was skipped while the screen was off
         self._ino = None            # inotify fd on /run/vegas-ui, or None
         self._wake_poll = None      # fallback timer while dark when inotify is not there
+        self._screen = None         # G5: the last screen state seen other than "menu" (None = not read yet)
 
     # --- what the page refreshes; Home and Network override ----------------------------------------------------
     def refresh_status(self) -> None:
@@ -285,9 +299,30 @@ class VegasApp(App):
         """/run/vegas-ui/rotation was written (Home's SCREEN row follows it)."""
         pass
 
+    def screen_back(self) -> bool:
+        """G5: the screen came back (state "on" after off, glance or pin; H1: not dim). True = the page refreshed itself
+        (the B6 refresh after a dark spell is then not run a second time)."""
+        return False
+
+    def screen_on(self) -> bool:
+        """G5: the screen is on as last seen by the watch (a menu over it does not count; not seen yet: the file).
+        H1: dim counts as on (lit, only dimmer)."""
+        state = self._screen if self._screen is not None else uictl.screen_state()
+        return state not in SCREEN_BACK_FROM
+
+    def _screen_seen(self, state) -> bool:
+        """G5: note a screen state read from /run/vegas-ui/state; True when it is the screen coming back. "menu" is
+        transparent (the state before it decides: dim, menu, on is a return from dim, no event, H1)."""
+        if state == "menu":
+            return False
+        prev, self._screen = self._screen, state
+        return state == "on" and prev in SCREEN_BACK_FROM
+
     def tick(self) -> None:
         """The 10 s refresh. While the screen is off: one file read, no thread, no fork; remember to refresh."""
-        if uictl.screen_state() == "off":
+        state = uictl.screen_state()
+        back = self._screen_seen(state)
+        if state == "off":
             self.set_hl(False)
             if not self.stale:
                 self.stale = True
@@ -295,14 +330,25 @@ class VegasApp(App):
                     self._wake_poll.resume()
             return
         self.stale = False
+        if back and self.screen_back():
+            return
         self.refresh_status()
+
+    def _state_event(self) -> None:
+        """/run/vegas-ui/state was written (inotify) or read by the 2 s poll while dark: G5 screen back, then B6."""
+        if self._screen_seen(uictl.screen_state()) and self.screen_back():
+            self._woke()
+        self._wake_check()
+
+    def _woke(self) -> None:
+        self.stale = False
+        if self._wake_poll is not None:
+            self._wake_poll.pause()
 
     def _wake_check(self) -> None:
         """The screen came back (a state other than off): refresh once now, not at the next 10 s tick."""
         if self.stale and uictl.screen_state() != "off":
-            self.stale = False
-            if self._wake_poll is not None:
-                self._wake_poll.pause()
+            self._woke()
             self.refresh_status()
 
     def _watch_state(self) -> None:
@@ -320,7 +366,7 @@ class VegasApp(App):
             self._ino = fd
         except (AttributeError, OSError, RuntimeError, NotImplementedError):
             self._ino = None
-            self._wake_poll = self.set_interval(2, self._wake_check, pause=True)
+            self._wake_poll = self.set_interval(2, self._state_event, pause=True)
 
     def _ino_event(self) -> None:
         try:
@@ -334,11 +380,13 @@ class VegasApp(App):
             i += 16 + n
         try:
             if b"state" in names:
-                self._wake_check()
+                self._state_event()
             if b"rotation" in names:     # vegas-rotate wrote it (from a key, the menu, a shell): no fork, no gather
                 self.rotation_changed()
             if b"kbd-window" in names:   # uictl's tmux hook: another window of "main" is in front
                 self.front_changed()
+            if b"pin-ask" in names:      # R10: vegas-keys answered a PIN pad request (Home)
+                self.pin_ask_changed()
         except Exception:   # never let a late event (app closing) raise inside the event loop
             pass
 
@@ -421,6 +469,10 @@ class VegasApp(App):
         """/run/vegas-ui/kbd-window was written (the tmux hook: the window in front of "main" changed)."""
         pass
 
+    def pin_ask_changed(self) -> None:
+        """/run/vegas-ui/pin-ask was written (vegas-keys' answer to a PIN pad request, ruling R10)."""
+        pass
+
     # --- key highlight ---------------------------------------------------------------------------------------------
     def set_hl(self, on: bool) -> None:
         if on == self._hl:
@@ -454,6 +506,7 @@ class VegasApp(App):
 
     def on_mount(self) -> None:
         uictl.set_highlight(self.UI_NAME, False)    # also makes /run/vegas-ui for the watch
+        self._screen_seen(uictl.screen_state())      # G5: the state at start is no transition
         self.set_class(self.size.width > 100, "wide")
         self._watch_state()
         self.call_after_refresh(self.fit)
