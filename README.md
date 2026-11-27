@@ -27,6 +27,20 @@ Everything below was verified on the maintainer's own phones. Each doc marks its
 - **End state A (legacy).** Unlocked bootloader and permanent KernelSU root. No phone runs it now. Its scripts and
   `ksu-modules/` are kept for reference, and the way back from D to A is unverified.
 
+## Screenshots
+
+The touch UI on the Debian side (end state E). These are rendered from the UI code with made-up data on a Mac
+([`tests/ui-seed/tools/render_readme_svgs.py`](tests/ui-seed/tools/render_readme_svgs.py)); they are not photos of
+the phone.
+
+| Glance | Away PIN pad | Home | Network |
+| --- | --- | --- | --- |
+| <img src="docs/ui/img/glance.svg" width="150" alt="Glance"> | <img src="docs/ui/img/pin-pad-wait.svg" width="150" alt="Away PIN pad"> | <img src="docs/ui/img/home.svg" width="210" alt="Home"> | <img src="docs/ui/img/network.svg" width="210" alt="Network"> |
+| Shown on wake: battery, charge band, addresses, SSH. | Away mode: a wrong PIN starts a wait. | Status, brightness, text size, rotation, windows. | Wi-Fi in range, hotspot, rescan. |
+
+Landscape: [glance](docs/ui/img/glance-landscape.svg) and [PIN pad](docs/ui/img/pin-pad-landscape.svg). The
+landscape glance leaves two columns blank on each short edge, for the camera hole.
+
 ## What we want help with
 
 Work is organised in **batches**. A batch is one GitHub issue that holds 1 to 8 related tasks in working order, and
